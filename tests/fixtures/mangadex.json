@@ -1,0 +1,5 @@
+{
+  "search": { "result": "ok", "limit": 20, "offset": 0, "total": 21, "data": [{ "id": "11111111-1111-4111-8111-111111111111", "type": "manga", "attributes": { "title": { "en": "Fixture Series" }, "description": { "en": "A deterministic test series." } }, "relationships": [] }] },
+  "chapters": { "result": "ok", "limit": 100, "offset": 0, "total": 101, "data": [{ "id": "22222222-2222-4222-8222-222222222222", "type": "chapter", "attributes": { "title": "Beginning", "chapter": "1", "volume": "1", "translatedLanguage": "en", "pages": 2, "externalUrl": null }, "relationships": [{ "id": "11111111-1111-4111-8111-111111111111", "type": "manga" }, { "id": "33333333-3333-4333-8333-333333333333", "type": "scanlation_group", "attributes": { "name": "Fixture Group" } }] }] },
+  "atHome": { "result": "ok", "baseUrl": "https://node.example.mangadex.network/token", "chapter": { "hash": "abc123", "data": ["page-b.png", "page-a.png"], "dataSaver": [] } }
+}

@@ -1,0 +1,19 @@
+{
+  "name": "bear-cave", "productName": "Bear Cave", "version": "0.1.0", "private": true,
+  "description": "Windows tray manga downloader", "author": "Bear Cave contributors",
+  "main": "dist/main/desktop/main.js", "type": "module",
+  "engines": { "node": ">=24.15.0 <25" },
+  "scripts": {
+    "dev": "npm run build && node scripts/run-electron.mjs .",
+    "start": "node scripts/run-electron.mjs .",
+    "typecheck": "tsc --noEmit && vue-tsc --noEmit -p tsconfig.ui.json",
+    "test": "vitest run",
+    "test:electron": "node scripts/run-electron.mjs scripts/electron-smoke.cjs && node scripts/run-electron.mjs scripts/main-smoke.cjs && node scripts/run-electron.mjs scripts/main-smoke.cjs --port-conflict",
+    "build": "tsc -p tsconfig.build.json && vite build && node scripts/copy-preload.mjs",
+    "dist:win": "npm run build && electron-builder --win nsis --x64 --publish never",
+    "smoke:mangadex": "tsx scripts/smoke.ts"
+  },
+  "dependencies": { "fflate": "^0.8.2", "vue": "3.5.44", "zod": "^4.3.6" },
+  "devDependencies": { "@types/node": "^24.10.0", "@vitejs/plugin-vue": "^6.0.0", "electron": "44.9.2", "electron-builder": "26.15.3", "tsx": "^4.21.0", "typescript": "^5.9.3", "vite": "8.3.4", "vitest": "^4.1.0", "vue-tsc": "^3.1.0" },
+  "build": { "appId": "net.lionhosting.bearcave", "productName": "Bear Cave", "directories": { "output": "release" }, "files": ["dist/**/*", "package.json"], "asar": true, "win": { "target": "nsis" }, "nsis": { "oneClick": false, "perMachine": false, "allowToChangeInstallationDirectory": true, "deleteAppDataOnUninstall": false } }
+}

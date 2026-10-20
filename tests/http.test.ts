@@ -1,0 +1,20 @@
+import { describe,it,expect,vi,beforeEach } from 'vitest';
+import { EventEmitter } from 'node:events';
+import { PassThrough } from 'node:stream';
+const mocks=vi.hoisted(()=>({lookup:vi.fn(),get:vi.fn()}));
+vi.mock('node:dns/promises',()=>({lookup:mocks.lookup}));
+vi.mock('node:https',()=>({default:{get:mocks.get}}));
+import { SafeHttp,validateUrl,publicIPv4,retryAfter,Gate } from '../src/sources/http.js';
+function response(status:number,headers:Record<string,string>={},body='{}') {
+  mocks.get.mockImplementationOnce((_url,_options,callback)=>{const req=new EventEmitter() as EventEmitter & {setTimeout:()=>void;destroy:(e:Error)=>void};req.setTimeout=()=>{};req.destroy=e=>req.emit('error',e);queueMicrotask(()=>{const res=new PassThrough() as PassThrough & {statusCode:number;headers:Record<string,string>};res.statusCode=status;res.headers=headers;callback(res);res.end(body);});return req;});
+}
+beforeEach(()=>{mocks.lookup.mockReset();mocks.get.mockReset();mocks.lookup.mockResolvedValue([{address:'8.8.8.8',family:4}]);});
+describe('safe source networking',()=> {
+  it('allows declared HTTPS hosts only, with exact wildcard suffixes',()=>{expect(validateUrl('https://a.b.mangadex.network/data/x',['*.mangadex.network']).hostname).toBe('a.b.mangadex.network');for(const u of ['http://api.mangadex.org','https://api.mangadex.org.evil.example','https://api.mangadex.org:8443','https://user:pass@api.mangadex.org','https://127.0.0.1/','file:///C:/secret','https://mangadex.network/'])expect(()=>validateUrl(u,['api.mangadex.org','*.mangadex.network'])).toThrow();});
+  it('rejects local/private/link-local/special addresses, including IPv6/mapped forms',()=>{for(const ip of ['127.0.0.1','10.0.0.1','172.16.0.1','192.168.1.1','169.254.169.254','100.64.0.1','0.0.0.0','224.0.0.1','198.18.0.1','192.0.2.1','::1','::ffff:127.0.0.1'])expect(publicIPv4(ip)).toBe(false);expect(publicIPv4('8.8.8.8')).toBe(true);});
+  it('pins the validated DNS address to the connection and rejects private DNS answers',async()=>{response(200);const h=new SafeHttp();await h.get('https://api.mangadex.org/manga',['api.mangadex.org']);const options=mocks.get.mock.calls[0][1];options.lookup('api.mangadex.org',{},(error:unknown,ip:string)=>{expect(error).toBe(null);expect(ip).toBe('8.8.8.8');});mocks.lookup.mockResolvedValueOnce([{address:'127.0.0.1',family:4}]);await expect(h.get('https://api.mangadex.org/manga',['api.mangadex.org'])).rejects.toThrow('blocked');expect(mocks.get).toHaveBeenCalledTimes(1);});
+  it('validates redirect destinations before any connection',async()=>{response(302,{location:'https://127.0.0.1/secret'});const h=new SafeHttp();await expect(h.get('https://api.mangadex.org/manga',['api.mangadex.org'])).rejects.toThrow('not allowed');expect(mocks.get).toHaveBeenCalledTimes(1);});
+  it('does not retry authentication failures or browser challenges',async()=>{response(403);await expect(new SafeHttp().get('https://api.mangadex.org/manga',['api.mangadex.org'])).rejects.toMatchObject({kind:'action_required'});expect(mocks.get).toHaveBeenCalledTimes(1);response(200,{'content-type':'text/html'},'<html>challenge</html>');await expect(new SafeHttp().get('https://api.mangadex.org/manga',['api.mangadex.org'])).rejects.toMatchObject({kind:'action_required'});expect(mocks.get).toHaveBeenCalledTimes(2);});
+  it('bounds transient retries and stops at four attempts',async()=>{for(let i=0;i<4;i++)response(500);await expect(new SafeHttp().get('https://api.mangadex.org/manga',['api.mangadex.org'])).rejects.toMatchObject({kind:'transient'});expect(mocks.get).toHaveBeenCalledTimes(4);},12000);
+  it('respects Retry-After seconds/dates, paces requests, and cancels waiting work',async()=>{expect(retryAfter('2')).toBe(2000);expect(retryAfter(new Date(Date.now()+5000).toUTCString())).toBeGreaterThan(3000);const gate=new Gate(25);const start=Date.now();await gate.wait();await gate.wait();expect(Date.now()-start).toBeGreaterThanOrEqual(20);gate.block(60);const blocked=Date.now();await gate.wait();expect(Date.now()-blocked).toBeGreaterThanOrEqual(50);const c=new AbortController();c.abort();await expect(gate.wait(c.signal)).rejects.toThrow();});
+});

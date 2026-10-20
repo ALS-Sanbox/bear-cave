@@ -1,0 +1,15 @@
+import { describe,it,expect } from 'vitest';
+import { readFile } from 'node:fs/promises';
+import path from 'node:path';
+import { setTimeout as delay } from 'node:timers/promises';
+import { unzipSync } from 'fflate';
+import { Store } from '../src/core/store.js';
+import { Queue } from '../src/engine/queue.js';
+import { Registry } from '../src/sources/registry.js';
+import { SourceError } from '../src/shared/types.js';
+import { workspace,series,chapter,png,adapter,eventually } from './helpers.js';
+describe('download engine end to end with deterministic transport',()=> {
+  it('reopens SQLite and recovers completed pages after an interrupted real worker',async()=>{const w=await workspace(),file=path.join(w.dir,'queue.sqlite'),c=chapter(),registry=new Registry([adapter([c])]);let s=new Store(file),calls=0;let q=new Queue(s,registry,()=>w.settings,{get:async(_url,_hosts,signal)=>{if(++calls===2)await delay(30000,undefined,{signal});return png;}});try{const j=s.enqueue(series,c,w.settings).job;q.tick();await eventually(()=>s.job(j.id)?.done===1);await q.stop();expect(s.job(j.id)?.state).toBe('queued');s.close();s=new Store(file);let recoveredCalls=0;q=new Queue(s,registry,()=>w.settings,{get:async()=>{recoveredCalls++;return png;}});q.tick();await eventually(()=>s.job(j.id)?.state==='completed');expect(recoveredCalls).toBe(1);expect(s.job(j.id)?.done).toBe(2);}finally{await q.stop();s.close();await w.cleanup();}});
+  it('refreshes expired URLs, preserves page ordering, validates output and skips completed identities',async()=>{const w=await workspace(),s=new Store(':memory:'),c=chapter();const a=adapter([c]);let resolves=0;const resolve=a.resolve;a.resolve=async(...args)=>{resolves++;return resolve(...args);};const seen:string[]=[];let expired=true;const q=new Queue(s,new Registry([a]),()=>w.settings,{get:async(url)=>{seen.push(url);if(expired){expired=false;throw new SourceError('Expired','expired');}return png;}});try{const j=s.enqueue(series,c,w.settings).job;q.tick();await eventually(()=>s.job(j.id)?.state==='completed');expect(resolves).toBe(2);expect(seen).toEqual(['https://uploads.mangadex.org/2.png','https://uploads.mangadex.org/2.png','https://uploads.mangadex.org/1.png']);const job=s.job(j.id)!;const files=unzipSync(await readFile(job.output!));expect(Object.keys(files).slice(0,2)).toEqual(['00001.png','00002.png']);expect(job.done).toBe(2);expect(s.enqueue(series,c,w.settings).duplicate).toBe(true);}finally{await q.stop();s.close();await w.cleanup();}});
+  it('reports disk-full failures and retries only on user action',async()=>{const w=await workspace(),s=new Store(':memory:'),c=chapter();const q=new Queue(s,new Registry([adapter([c])]),()=>w.settings,{get:async()=>{throw Object.assign(Error('disk'),{code:'ENOSPC'});}});try{const j=s.enqueue(series,c,w.settings).job;q.tick();await eventually(()=>s.job(j.id)?.state==='failed');expect(s.job(j.id)?.error).toContain('Disk full');q.tick();expect(s.job(j.id)?.attempts).toBe(1);}finally{await q.stop();s.close();await w.cleanup();}});
+});

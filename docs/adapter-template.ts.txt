@@ -1,0 +1,21 @@
+import type { SourceAdapter, SourceManifest, ChapterFilter } from '../shared/types.js';
+import { SourceError } from '../shared/types.js';
+import { sharedHttp } from './http.js';
+// Copy to src/sources, implement with sharedHttp + source-specific gates, register, test.
+export class YourSource implements SourceAdapter {
+  manifest: SourceManifest = {
+    id:'your-source', name:'Your Source', website:'https://source.example/',
+    interfaceVersion:1, status:'operational',
+    capabilities:['search','series','chapters','public-download'],
+    apiHosts:['api.source.example'], imageHosts:['images.source.example'],
+    recommended:{chapters:1,pageRequests:1,requestIntervalMs:1000}
+  };
+  async search(query:string,offset:number,signal?:AbortSignal):Promise<never>{throw new SourceError('Implement search');}
+  async series(id:string,signal?:AbortSignal):Promise<never>{throw new SourceError('Implement series');}
+  async chapter(id:string,signal?:AbortSignal):Promise<never>{throw new SourceError('Implement metadata');}
+  async chapters(id:string,filter:ChapterFilter,offset:number,signal?:AbortSignal):Promise<never>{throw new SourceError('Implement filtered pagination');}
+  async resolve(id:string,signal?:AbortSignal):Promise<never>{
+    // Return {revision,urls} in source order. Challenges: SourceError(...,'action_required').
+    throw new SourceError('Implement page resolution');
+  }
+}
