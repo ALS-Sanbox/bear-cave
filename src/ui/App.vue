@@ -21,7 +21,7 @@ const activeCount=computed(()=>jobs.value.filter(j=>j.state==='running').length)
 let timer:ReturnType<typeof setInterval>|undefined;
 async function api<T>(url:string,body?:unknown,signal?:AbortSignal):Promise<T> {
   const response=await fetch(`/api/${url}`,{ method:body===undefined?'GET':'POST',headers:body===undefined?{}:{'Content-Type':'application/json','X-CSRF-Token':csrf.value},body:body===undefined?undefined:JSON.stringify(body),signal });
-  const data=await response.json(); if(!response.ok) { if(response.status===401) authenticated.value=false; throw Error(data.error??'Request failed.'); } return data as T;
+  const data=await response.json(); if(!response.ok) { if(response.status===401 && url!=='login') { authenticated.value=false;csrf.value='';jobs.value=[];busy.value=false;previewController?.abort();previewController=undefined;previewLoading.value=false;preview.value=undefined;downloadDialog.value?.close();throw Error('Your dashboard session ended. Sign in again using your Bear Cave administrator password.'); } throw Error(data.error??'Request failed.'); } return data as T;
 }
 async function perform(fn:()=>Promise<unknown>) { busy.value=true; error.value=''; message.value=''; try { await fn(); } catch(e) { error.value=(e as Error).message; } finally { busy.value=false; } }
 async function refresh() { if(!authenticated.value) return; const data=await api<{jobs:Job[];paused:boolean}>('jobs'); jobs.value=data.jobs; paused.value=data.paused; }
@@ -95,7 +95,7 @@ onUnmounted(()=> { if(timer) clearInterval(timer);previewController?.abort(); })
       <section v-else-if="!authenticated" class="login card">
         <img :src="logoFull" class="login-logo" alt="Bear Cave"><p class="eyebrow">WELCOME TO YOUR CAVE</p><h1>A little offline reading.</h1><p>Sign in to discover manga and manage downloads on your Windows computer.</p>
         <div v-if="setupRequired" class="notice">Open Settings from the local Bear Cave tray menu to create the administrator password.</div>
-        <form @submit.prevent="login"><label>Administrator password<input v-model="password" type="password" autocomplete="current-password" required maxlength="256"></label><button class="primary" :disabled="busy||setupRequired">Sign in</button></form>
+        <p class="hint">Use the administrator password saved in Bear Cave tray Settings. If you forgot it, open Settings, enter a new administrator password and Save.</p><form @submit.prevent="login"><label>Administrator password<input v-model="password" type="password" autocomplete="current-password" required maxlength="256"></label><button class="primary" :disabled="busy||setupRequired">Sign in</button></form>
       </section>
       <template v-else>
         <header><p class="eyebrow">YOUR PERSONAL MANGA SHELF</p><h1>{{ {search:'Find your next chapter.',queue:'Make room for offline.',history:'Ready when you are.',sources:'Connected to the stories.'}[view] }}</h1><p>{{ {search:'Choose a source and translation, then bring it home.',queue:'Real progress from the download engine on your Windows computer.',history:'Validated chapters, saved to your download folder.',sources:'Six connectors enabled. Live availability and access requirements vary by source.'}[view] }}</p></header>

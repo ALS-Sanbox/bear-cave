@@ -10,3 +10,4 @@ coverage/
 *.tsbuildinfo
 build/branding/
 src/ui/assets/logo-*.png
+src/ui/public/favicon.ico

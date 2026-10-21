@@ -95,8 +95,8 @@ export function createDashboard(store: Store, queue: Queue, registry: Registry, 
       if (!['GET','HEAD'].includes(method)) throw new ApiError(405,'Method not allowed.');
       const name = url.pathname === '/' ? 'index.html' : url.pathname.slice(1);
       // Serve only build assets; never fall back to arbitrary paths or application data.
-      if (name !== 'index.html' && !/^assets\/[a-zA-Z0-9_.-]+\.(js|css|png)$/.test(name)) throw new ApiError(404,'Not found.');
-      const file = await readFile(path.join(uiDir,name)); res.setHeader('Content-Type',name.endsWith('.js') ? 'text/javascript' : name.endsWith('.css') ? 'text/css' : name.endsWith('.png')?'image/png':'text/html; charset=utf-8'); res.end(method === 'HEAD' ? undefined : file);
+      if (name !== 'index.html' && name !== 'favicon.ico' && !/^assets\/[a-zA-Z0-9_.-]+\.(js|css|png)$/.test(name)) throw new ApiError(404,'Not found.');
+      const file = await readFile(path.join(uiDir,name)); res.setHeader('Content-Type',name.endsWith('.ico') ? 'image/x-icon' : name.endsWith('.js') ? 'text/javascript' : name.endsWith('.css') ? 'text/css' : name.endsWith('.png')?'image/png':'text/html; charset=utf-8'); res.end(method === 'HEAD' ? undefined : file);
     } catch (e) {
       if (res.headersSent || res.destroyed) return;
       const status = e instanceof ApiError ? e.status : e instanceof z.ZodError ? 400 : e instanceof SourceError ? 502 : 400;

@@ -35,6 +35,10 @@ app.whenReady().then(async()=>{
   await remote.loadURL(`http://127.0.0.1:${port}`);await new Promise(r=>setTimeout(r,400));
   assert((await remote.webContents.executeJavaScript('document.body.innerText')).includes('Sign in'));
   assert.equal(await remote.webContents.executeJavaScript('typeof window.bearCaveLocal'),'undefined');
+  assert.equal(await remote.webContents.executeJavaScript(`fetch('/favicon.ico').then(async r=>r.status===200&&r.headers.get('content-type')==='image/x-icon'&&(await r.arrayBuffer()).byteLength>0)`),true);
+  await remote.webContents.executeJavaScript(`(()=>{const input=document.querySelector('.login input');input.value='wrong password';input.dispatchEvent(new Event('input',{bubbles:true}));document.querySelector('.login form').requestSubmit();})()`);
+  await new Promise(r=>setTimeout(r,600));
+  assert((await remote.webContents.executeJavaScript('document.querySelector("[role=alert]").textContent')).includes('Bear Cave tray Settings'));
   const login=await remote.webContents.executeJavaScript(`fetch('/api/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({password:'temporary integration password'})}).then(r=>r.status)`);
   assert.equal(login,200);
   await remote.reload();await new Promise(r=>setTimeout(r,500));
@@ -44,6 +48,16 @@ app.whenReady().then(async()=>{
   assert((await remote.webContents.executeJavaScript('document.body.innerText')).includes('ToonGod'));
   assert.equal(await remote.webContents.executeJavaScript('document.querySelectorAll(".source-grid article").length'),6);
   assert(await remote.webContents.executeJavaScript('Array.from(document.images).every(i=>i.complete && i.naturalWidth>0)'));
+  server.auth.clear();
+  await new Promise(r=>setTimeout(r,2400));
+  assert((await remote.webContents.executeJavaScript('document.body.innerText')).includes('Your dashboard session ended'));
+  assert(await remote.webContents.executeJavaScript('!!document.querySelector(".login form")'));
+  let unauthorizedPolls=0;
+  const listener=(_details,callback)=>{if(_details.url.endsWith('/api/jobs'))unauthorizedPolls++;callback({});};
+  remote.webContents.session.webRequest.onBeforeRequest(listener);
+  await new Promise(r=>setTimeout(r,2400));
+  remote.webContents.session.webRequest.onBeforeRequest(null);
+  assert.equal(unauthorizedPolls,0,'Polling stops while signed out');
   console.log('Electron smoke passed: native SQLite, DPAPI roundtrip, sandboxed preload, local settings rendering, remote login, dashboard and sources.');
   local.destroy();remote.destroy();await server.close();await queue.stop();db.close();app.exit(0);
 }).catch(async e=>{console.error(e);try{await server?.close();await queue?.stop();db?.close();}catch{}app.exit(1);});

@@ -22,7 +22,7 @@ export class Auth {
     this.failures.push(Date.now()); this.pending++;
     try {
       const hash = this.store.get<string>('admin-hash');
-      if (!hash || !await verifyPassword(password,hash)) throw Error('Invalid password or local setup is required.');
+      if (!hash || !await verifyPassword(password,hash)) throw Error('Dashboard sign-in failed. Use the administrator password set in Bear Cave tray Settings. To set a new password, open Settings, enter a new administrator password and Save.');
       for (const [id,s] of this.sessions) if (s.expires <= Date.now()) this.sessions.delete(id);
       if (this.sessions.size >= 32) this.sessions.delete(this.sessions.keys().next().value!);
       const s = { id: randomBytes(32).toString('hex'), csrf: randomBytes(32).toString('hex'), expires: Date.now()+12*60*60*1000 };
