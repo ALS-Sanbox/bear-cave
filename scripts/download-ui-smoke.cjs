@@ -55,6 +55,16 @@ app.whenReady().then(async()=>{
   await until(()=>store.states('completed').length===1,'real queue writes and validates CBZ');
   await until(()=>js('!document.querySelector(".download-dialog").open && document.querySelector("nav .current").textContent.includes("Download queue")'),'automatic queue navigation');
   assert.equal(store.jobs().length,1);assert(fs.existsSync(store.jobs()[0].output));
+  assert.equal(path.relative(settings.downloadRoot,store.jobs()[0].output),path.join('Download fixture','Download fixture 001.cbz'));
+  // Exercise real Retry and Clear failed controls, including a paused engine.
+  const retryJob=store.enqueue(series,chapters[1],settings).job;store.update(retryJob.id,{state:'failed',error:'Fixture failure'});queue.pauseAll();
+  await until(()=>js('Array.from(document.querySelectorAll(".job button")).some(b=>b.textContent==="Retry")'),'retry button');
+  await js('Array.from(document.querySelectorAll(".job button")).find(b=>b.textContent==="Retry").click()');
+  await until(()=>store.job(retryJob.id)?.state==='completed','retry while paused completes chapter');
+  const failed=store.enqueue(series,chapters[2],settings).job;store.update(failed.id,{state:'failed',error:'Fixture failure'});
+  await until(()=>js('Array.from(document.querySelectorAll("button")).some(b=>b.textContent==="Clear failed chapters"&&!b.disabled)'),'clear failed ready');
+  await js('Array.from(document.querySelectorAll("button")).find(b=>b.textContent==="Clear failed chapters").click()');
+  await until(()=>!store.job(failed.id),'failed entry cleared');assert.equal(store.states('completed').length,2);assert(fs.existsSync(store.job(retryJob.id).output));
   console.log('Download UI smoke passed: dark-orange theme, visible modal/loading/errors, cancellation, selected/all counts, actual click-to-CBZ and queue navigation.');
   window.destroy();await dashboard.close();await queue.stop();store.close();app.exit(0);
 }).catch(async e=>{console.error(e);try{window?.destroy();await dashboard?.close();await queue?.stop();store?.close();}catch{}app.exit(1);});

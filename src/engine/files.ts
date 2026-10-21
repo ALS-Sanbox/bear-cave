@@ -17,6 +17,7 @@ export function contained(root: string, ...parts: string[]): string {
 }
 async function noLink(file: string) { try { if ((await lstat(file)).isSymbolicLink()) throw Error('Symbolic links and junctions are not allowed in download paths.'); } catch (e) { if ((e as NodeJS.ErrnoException).code !== 'ENOENT') throw e; } }
 export function digest(data: Uint8Array): string { return createHash('sha256').update(data).digest('hex'); }
+export function chapterNumber(value: string): string { return /^\d+(?:\.\d+)?$/.test(value) ? value.replace(/^\d+/,n=>n.replace(/^0+(?=\d)/,'').padStart(3,'0')) : safeName(value,20); }
 function fileId(value:string) { return /^[a-f0-9-]{36}$/i.test(value) ? value.toLowerCase() : digest(Buffer.from(value)).slice(0,32); }
 export function imageExtension(data: Uint8Array): string {
   const b = Buffer.from(data);
@@ -32,12 +33,21 @@ export class ChapterOutput {
   constructor(private job: Job) {}
   async open(revision: string, count: number) {
     const root = await realpath(this.job.root);
-    const source = contained(root, safeName(this.job.source,30)); await noLink(source); await mkdir(source, { recursive: true });
-    // IDs, not translated titles, are the collision boundary. Titles remain readable in metadata/UI.
-    this.dir = contained(source, `${safeName(this.job.series.title,30)}-${fileId(this.job.series.id)}`); await noLink(this.dir); await mkdir(this.dir, { recursive: true });
-    const stem = `${safeName(this.job.chapter.number,12)}-${fileId(this.job.chapter.id)}`;
+    this.dir = contained(root, safeName(this.job.series.title,65)); await noLink(this.dir); await mkdir(this.dir, { recursive: true });
+    const metadata=contained(this.dir,'.bear-cave');await noLink(metadata);await mkdir(metadata,{recursive:true});
+    const identity=`${this.job.source}:${this.job.chapter.id}`;
+    const base=`${safeName(this.job.series.title,65)} ${chapterNumber(this.job.chapter.number)}`;
+    let stem=base;
+    // Atomically claim a readable filename so translations and cross-source duplicates never overwrite each other.
+    for(let attempt=0;attempt<2;attempt++){
+      const claim=contained(metadata,`${digest(Buffer.from(stem)).slice(0,32)}.json`);await noLink(claim);
+      try{await writeFile(claim,JSON.stringify(identity),{flag:'wx'});break;}catch(e){if((e as NodeJS.ErrnoException).code!=='EEXIST')throw e;}
+      if(JSON.parse(await readFile(claim,'utf8'))===identity)break;
+      if(attempt===1)throw Error('Chapter filename conflicts with another download.');
+      stem=`${base} [${this.job.source}-${digest(Buffer.from(identity)).slice(0,8)}]`;
+    }
     this.final = contained(this.dir, stem + (this.job.format === 'cbz' ? '.cbz' : ''));
-    this.stage = contained(this.dir, `.${fileId(this.job.chapter.id)}.incomplete`);
+    this.stage = contained(metadata, `${fileId(identity)}.incomplete`);
     await noLink(this.stage); await noLink(this.final); await mkdir(this.stage, { recursive: true });
     try { this.manifest = JSON.parse(await readFile(contained(this.stage,'manifest.json'),'utf8')) as Manifest; } catch { /* Missing or torn manifest is safely regenerated. */ }
     if (!this.manifest || this.manifest.version !== 1 || this.manifest.chapter !== this.job.chapter.id || this.manifest.revision !== revision || this.manifest.pages.length !== count) this.manifest = { version: 1, chapter: this.job.chapter.id, revision, pages: Array.from({ length: count }, () => null) };

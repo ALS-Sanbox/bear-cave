@@ -2,7 +2,7 @@
 
 A standalone Windows tray manga downloader with an authenticated Vue web dashboard. Windows owns the server, queue, SQLite database, sessions and downloads. No Lions Library, Docker or Linux server is needed.
 
-Version 0.2.2 enables MangaDex, Asura Scans, Flame Comics, ThunderScans, WEBTOON and ToonGod. ToonGod currently requires local human verification and its live reader remains unverified. The other newly added sources passed public search/chapter/image smoke tests. See [current source status](docs/source-status.md).
+Version 0.2.3 enables MangaDex, Asura Scans, Flame Comics, ThunderScans, WEBTOON and ToonGod. ToonGod currently requires local human verification and its live reader remains unverified. The other newly added sources passed public search/chapter/image smoke tests. See [current source status](docs/source-status.md).
 
 ## Windows development
 
@@ -28,7 +28,7 @@ npm.cmd run test:electron
 npm.cmd run dist:win
 ```
 
-Installer: `release\Bear Cave Setup 0.2.2.exe`. NSIS supports per-user installation and a selectable folder. The build downloads tooling but does not publish or install. It is unsigned and uses the supplied Bear Cave mark as its application icon. Signing needs your certificate; automatic updates are deferred. The supplied text logo appears on the dashboard and login screen; both originals remain in images/.
+Installer: `release\Bear Cave Setup 0.2.3.exe`. NSIS supports per-user installation and a selectable folder. The build downloads tooling but does not publish or install. It is unsigned and uses the supplied Bear Cave mark as its application icon. Signing needs your certificate; automatic updates are deferred. The supplied text logo appears on the dashboard and login screen; both originals remain in images/.
 
 Explicit live check (not part of automated fixture tests):
 
@@ -39,6 +39,10 @@ npm.cmd run smoke:sources -- asura flame thunder webtoon
 ```
 
 This checks up to five search results and one real image in memory. It does not download a whole chapter.
+
+Downloads use `Download root/Series Name/Series Name 001.cbz` (or a chapter image folder with the same name). Chapters have at least three digits, preserve decimals, and use a suffix only when another download claims the same name. The `.bear-cave` metadata directory supports recovery and prevents overwrites. Existing completed downloads are kept in their original location.
+
+Retry restarts the selected chapter and resumes the engine if globally paused. Clear failed chapters removes failed queue entries, keeps saved files and permits those chapters to be added again. MangaDex sign-in shows success or failure beside the account form in tray Settings.
 
 ## Try one chapter before bulk downloading
 

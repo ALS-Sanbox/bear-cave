@@ -75,14 +75,20 @@ export class Queue {
     }
     signal.throwIfAborted(); return output.finish();
   }
-  control(id: string, action: 'pause'|'resume'|'cancel'|'retry') {
+  control(id: string, action: 'pause'|'resume'|'cancel'|'retry'):void|Promise<void> {
     const j = this.store.job(id); if (!j) throw Error('Unknown job');
     if (j.state === 'completed') throw Error('Completed jobs cannot be changed.');
     if (action === 'pause') { if (!['running','queued'].includes(j.state)) throw Error('Only active jobs can be paused.'); this.store.update(id,{ state: 'paused' }); this.active.get(id)?.controller.abort(); }
     if (action === 'cancel') { this.store.update(id,{ state: 'cancelled' }); this.active.get(id)?.controller.abort(); }
-    if (action === 'resume' || action === 'retry') { if (this.active.has(id)) throw Error('Job is still stopping. Try again shortly.'); if (!['paused','failed','cancelled','action_required'].includes(j.state)) throw Error('Job cannot be retried in its current state.'); if(j.state==='action_required')this.store.set(`source-action:${j.source}`,null); this.store.update(id,{ state: 'queued', error: null }); }
+    if (action === 'resume' || action === 'retry') {
+      if (!['paused','failed','cancelled','action_required'].includes(j.state)) throw Error('Job cannot be retried in its current state.');
+      const active=this.active.get(id);if(active)return active.promise.then(()=>this.control(id,action));
+      if(j.state==='action_required')this.store.set(`source-action:${j.source}`,null);
+      this.store.set('queue-paused',false);this.store.update(id,{ state: 'queued', error: null });
+    }
     this.tick();
   }
+  async clearFailed() { await Promise.all(this.store.states('failed').flatMap(j=>this.active.get(j.id)?.promise??[]));return this.store.clearFailed(); }
   pauseAll() { this.store.set('queue-paused',true); for (const j of this.store.states('running','queued')) this.control(j.id,'pause'); }
   resumeAll() { this.store.set('queue-paused',false); for (const j of this.store.states('paused')) this.store.update(j.id,{ state: 'queued' }); this.tick(); }
   async stop() { this.stopping = true; if (this.timer) clearInterval(this.timer); for (const [id,a] of this.active) { if (this.store.job(id)?.state === 'running') this.store.update(id,{ state: 'queued' }); a.controller.abort(); } await Promise.all([...this.active.values()].map(a => a.promise)); }

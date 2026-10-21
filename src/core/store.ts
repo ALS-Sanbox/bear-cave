@@ -27,5 +27,6 @@ export class Store {
     this.db.prepare('UPDATE jobs SET state=?,data=? WHERE id=?').run(job.state, JSON.stringify(job), id); return job;
   }
   states(...states: JobState[]) { return this.jobs().filter(j => states.includes(j.state)); }
+  clearFailed() { return Number(this.db.prepare("DELETE FROM jobs WHERE state='failed'").run().changes); }
   close() { this.db.close(); }
 }

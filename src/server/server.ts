@@ -54,7 +54,8 @@ export function createDashboard(store: Store, queue: Queue, registry: Registry, 
         if (method === 'GET' && url.pathname === '/api/jobs') return send(res,200,{ paused: Boolean(store.get('queue-paused')), jobs: store.jobs().map(({ root,output,...job }) => ({ ...job, output: output ? path.basename(output) : null })) });
         if (method === 'POST' && url.pathname === '/api/queue') { const { action } = z.object({ action: z.enum(['pause','resume']) }).strict().parse(await body(req)); action === 'pause' ? queue.pauseAll() : queue.resumeAll(); return send(res,200,{ ok: true }); }
         const jobMatch = /^\/api\/jobs\/([a-f0-9-]+)$/.exec(url.pathname);
-        if (method === 'POST' && jobMatch) { const { action } = z.object({ action: z.enum(['pause','resume','cancel','retry']) }).strict().parse(await body(req)); queue.control(jobMatch[1],action); return send(res,200,{ ok: true }); }
+        if (method === 'POST' && url.pathname === '/api/jobs/clear-failed') { z.object({}).strict().parse(await body(req));return send(res,200,{cleared:await queue.clearFailed()}); }
+        if (method === 'POST' && jobMatch) { const { action } = z.object({ action: z.enum(['pause','resume','cancel','retry']) }).strict().parse(await body(req)); await queue.control(jobMatch[1],action); return send(res,200,{ ok: true }); }
         if (method === 'GET' && ['/api/search','/api/series','/api/chapters'].includes(url.pathname)) {
           reads = reads.filter(t => Date.now()-t < 60000); if (reads.length >= 90) throw new ApiError(429,'Too many source requests. Wait a minute.'); reads.push(Date.now());
           const adapter = registry.get(url.searchParams.get('source') ?? 'mangadex');

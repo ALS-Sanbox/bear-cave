@@ -26,11 +26,18 @@ app.whenReady().then(async()=>{
   const {BrowserSessions}=await import(pathToFileURL(path.resolve('dist/main/desktop/sessions.js')).href);const sourceSessions=new BrowserSessions();await session.fromPartition('persist:source-toongod').cookies.set({url:'https://www.toongod.org/',name:'fixture-isolation',value:'toongod-only',secure:true});assert((await sourceSessions.cookies('toongod',new URL('https://www.toongod.org/'))).includes('toongod-only'));assert.equal(await sourceSessions.cookies('thunder',new URL('https://www.toongod.org/')),'');assert.equal(await sourceSessions.cookies('toongod',new URL('https://en-thunderscans.com/')),'');
   const local=new BrowserWindow({show:false,webPreferences:{preload:path.resolve('dist/main/desktop/preload.cjs'),sandbox:true,contextIsolation:true,nodeIntegration:false}});
   ipcMain.handle('local:read',()=>({settings,adminConfigured:true}));
+  let rejectManga=true;
+  ipcMain.handle('local:manga-connect',()=>rejectManga?{ok:false,error:'Fixture sign-in rejected. Check your credentials.'}:{ok:true,status:{connected:true,username:'Fixture reader'}});
   await local.loadFile(path.resolve('dist/ui/index.html'));
   await new Promise(r=>setTimeout(r,500));
   assert((await local.webContents.executeJavaScript('document.body.innerText')).includes('Local settings'));
   assert.equal(await local.webContents.executeJavaScript('typeof require'),'undefined');
   assert.equal(await local.webContents.executeJavaScript('window.bearCaveLocal.read().then(r=>r.adminConfigured)'),true);
+  const submitManga=`(()=>{const form=document.querySelector('.account-settings form');for(const [i,input]of [...form.querySelectorAll('input')].entries()){input.value=['personal-client-fixture','fixture-secret','fixture-reader','fixture-password'][i];input.dispatchEvent(new Event('input',{bubbles:true}));}form.requestSubmit();})()`;
+  await local.webContents.executeJavaScript(submitManga);await new Promise(r=>setTimeout(r,200));
+  assert((await local.webContents.executeJavaScript('document.querySelector(".account-settings [role=alert]").textContent')).includes('Fixture sign-in rejected'));
+  rejectManga=false;await local.webContents.executeJavaScript(submitManga);await new Promise(r=>setTimeout(r,200));
+  assert((await local.webContents.executeJavaScript('document.querySelector(".account-settings [role=status]").textContent')).includes('MangaDex sign-in succeeded. Signed in as Fixture reader'));
   const remote=new BrowserWindow({show:false,webPreferences:{sandbox:true,contextIsolation:true,nodeIntegration:false}});
   await remote.loadURL(`http://127.0.0.1:${port}`);await new Promise(r=>setTimeout(r,400));
   assert((await remote.webContents.executeJavaScript('document.body.innerText')).includes('Sign in'));

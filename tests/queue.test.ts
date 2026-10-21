@@ -8,6 +8,13 @@ import { SourceError } from '../src/shared/types.js';
 import { workspace,series,chapter,eventually } from './helpers.js';
 
 describe('persistent queue',()=> {
+  it('retries a failed download while globally paused and clears only failed entries',async()=>{
+    const w=await workspace(),s=new Store(':memory:');let fail=true;
+    const q=new Queue(s,new Registry([]),()=>w.settings,undefined,async()=>{if(fail)throw Error('temporary failure');return 'done';});
+    try{const j=s.enqueue(series,chapter(),w.settings).job;q.tick();await eventually(()=>s.job(j.id)?.state==='failed');q.pauseAll();fail=false;await q.control(j.id,'retry');await eventually(()=>s.job(j.id)?.state==='completed');expect(s.get('queue-paused')).toBe(false);expect(s.job(j.id)?.attempts).toBe(2);
+      const failed=s.enqueue(series,chapter(),w.settings).job;s.update(failed.id,{state:'failed'});const paused=s.enqueue(series,chapter(),w.settings).job;s.update(paused.id,{state:'paused'});expect(await q.clearFailed()).toBe(1);expect(s.job(failed.id)).toBeUndefined();expect(s.job(j.id)?.state).toBe('completed');expect(s.job(paused.id)?.state).toBe('paused');expect(s.enqueue(series,failed.chapter,w.settings).duplicate).toBe(false);
+    }finally{await q.stop();s.close();await w.cleanup();}
+  });
   it('recovers running work, preserves explicit pauses/global pause and completed identity',async()=> {
     const w=await workspace(); const file=path.join(w.dir,'queue.sqlite'); let s=new Store(file);
     try { const c=chapter(); const j=s.enqueue(series,c,w.settings).job; s.update(j.id,{state:'running',done:1}); const p=s.enqueue(series,chapter(),w.settings).job; s.update(p.id,{state:'paused'}); const complete=s.enqueue(series,chapter(),w.settings).job; s.update(complete.id,{state:'completed',output:'test.cbz'}); s.set('queue-paused',true); s.close(); s=new Store(file);
