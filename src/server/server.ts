@@ -66,11 +66,12 @@ export function createDashboard(store: Store, queue: Queue, registry: Registry, 
         }
         if (method === 'POST' && url.pathname === '/api/preview') {
           const data = z.object({ source: z.string().max(30), seriesId: opaqueId, language: z.string().min(2).max(10), group: opaqueId.optional(), ids: z.array(opaqueId).min(1).max(10000).optional() }).strict().parse(await body(req));
-          for (const [id,p] of previews) if (p.expires < Date.now()) previews.delete(id);
+          // The UI has one current confirmation per session; replacing/cancelling previews must not exhaust the cache.
+          for (const [id,p] of previews) if (p.expires < Date.now() || p.session===session.id) previews.delete(id);
           if (busyPreviews >= 1 || previews.size >= 10) throw new ApiError(429,'A chapter preview is already in progress, or too many are pending.'); busyPreviews++;
           try {
             const adapter = registry.get(data.source), series = await adapter.series(data.seriesId,abort.signal); const chapters: Chapter[] = []; let offset = 0;
-            do { const page = await adapter.chapters(data.seriesId,data,offset,abort.signal); chapters.push(...page.items); offset += page.limit; if (offset >= page.total) break; if (offset + page.limit > 10000) throw new ApiError(400,'Too many matching chapters. Narrow the language/group filter.'); } while (true);
+            do { const page = await adapter.chapters(data.seriesId,data,offset,abort.signal); chapters.push(...page.items); offset += page.limit; if (data.ids && data.ids.every(id=>chapters.some(c=>c.id===id)) || offset >= page.total) break; if (offset + page.limit > 10000) throw new ApiError(400,'Too many matching chapters. Narrow the language/group filter.'); } while (true);
             const unique = [...new Map(chapters.map(c => [c.id,c])).values()].filter(c => !c.external && c.pages !== 0 && c.source===data.source && c.seriesId===data.seriesId && (!data.ids || data.ids.includes(c.id)));
             if (data.ids && data.ids.some(id => !unique.some(c => c.id === id))) throw new ApiError(400,'Some selected chapters no longer match or are unavailable. Refresh the list.');
             const logical = new Set<string>(); let multipleTranslations = 0;

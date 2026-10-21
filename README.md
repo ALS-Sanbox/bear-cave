@@ -2,7 +2,7 @@
 
 A standalone Windows tray manga downloader with an authenticated Vue web dashboard. Windows owns the server, queue, SQLite database, sessions and downloads. No Lions Library, Docker or Linux server is needed.
 
-Version 0.2.0 enables MangaDex, Asura Scans, Flame Comics, ThunderScans, WEBTOON and ToonGod. ToonGod currently requires local human verification and its live reader remains unverified. The other newly added sources passed public search/chapter/image smoke tests. See [current source status](docs/source-status.md).
+Version 0.2.1 enables MangaDex, Asura Scans, Flame Comics, ThunderScans, WEBTOON and ToonGod. ToonGod currently requires local human verification and its live reader remains unverified. The other newly added sources passed public search/chapter/image smoke tests. See [current source status](docs/source-status.md).
 
 ## Windows development
 
@@ -28,7 +28,7 @@ npm.cmd run test:electron
 npm.cmd run dist:win
 ```
 
-Installer: `release\Bear Cave Setup 0.2.0.exe`. NSIS supports per-user installation and a selectable folder. The build downloads tooling but does not publish or install. It is unsigned and uses the supplied Bear Cave mark as its application icon. Signing needs your certificate; automatic updates are deferred. The supplied text logo appears on the dashboard and login screen; both originals remain in images/.
+Installer: `release\Bear Cave Setup 0.2.1.exe`. NSIS supports per-user installation and a selectable folder. The build downloads tooling but does not publish or install. It is unsigned and uses the supplied Bear Cave mark as its application icon. Signing needs your certificate; automatic updates are deferred. The supplied text logo appears on the dashboard and login screen; both originals remain in images/.
 
 Explicit live check (not part of automated fixture tests):
 
@@ -43,7 +43,7 @@ This checks up to five search results and one real image in memory. It does not 
 ## Try one chapter before bulk downloading
 
 1. Search and open a series. Select language and apply filters. Groups appear as you load chapter pages.
-2. Click Download on one chapter, review its count and confirm.
+2. Click Download on one chapter, review its count in the confirmation dialog and confirm. The dashboard opens Download queue automatically; source errors appear in the dialog.
 3. Watch Download queue, then History. Open the actual CBZ/folder in Explorer and your reader.
 4. Only then use selected chapters or Preview all matching. Additional translations require explicit confirmation. Existing source/chapter IDs are skipped, including failed/cancelled jobs: use Retry for those.
 

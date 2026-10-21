@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 // Some developer shells set this globally. It must never turn the desktop app into Node mode.
 const env={...process.env};delete env.ELECTRON_RUN_AS_NODE;
-const smoke=['scripts/electron-smoke.cjs','scripts/main-smoke.cjs'].includes(process.argv[2]);
+const smoke=['scripts/electron-smoke.cjs','scripts/main-smoke.cjs','scripts/download-ui-smoke.cjs'].includes(process.argv[2]);
 const temp=smoke?await mkdtemp(path.join(os.tmpdir(),'bear-cave-electron-')):undefined;
 if(temp)env.BEAR_CAVE_SMOKE_DATA=temp;
 const child=spawn(electron,process.argv.slice(2),{stdio:'inherit',windowsHide:true,env});

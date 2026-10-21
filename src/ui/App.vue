@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted } from 'vue';
+import { ref, computed, onMounted, onUnmounted, nextTick } from 'vue';
 import type { Settings, Series, Chapter, Job, SourceManifest, PageResult } from '../shared/types';
 import logoFull from './assets/logo-full.png';
 import logoMark from './assets/logo-mark.png';
@@ -14,11 +14,13 @@ const query=ref(''), results=ref<PageResult<Series>>(), detail=ref<Series>(), ch
 const selected=ref<string[]>([]), knownGroups=ref<{id:string;name:string}[]>([]), jobs=ref<Job[]>([]), paused=ref(false), sources=ref<SourceManifest[]>([]);
 const selectedSource=ref('mangadex'), enabledSources=computed(()=>sources.value.filter(s=>s.status==='operational'));
 const preview=ref<{ token:string;count:number;multipleTranslations:number }>(), confirmTranslations=ref(false);
+const downloadDialog=ref<HTMLDialogElement>(), previewLoading=ref(false), previewError=ref(''), previewHeading=ref<HTMLElement>();
+let previewController:AbortController|undefined;
 const visibleJobs=computed(()=>jobs.value.filter(j=>view.value==='history' ? j.state==='completed' : j.state!=='completed'));
 const activeCount=computed(()=>jobs.value.filter(j=>j.state==='running').length);
 let timer:ReturnType<typeof setInterval>|undefined;
-async function api<T>(url:string,body?:unknown):Promise<T> {
-  const response=await fetch(`/api/${url}`,{ method:body===undefined?'GET':'POST',headers:body===undefined?{}:{'Content-Type':'application/json','X-CSRF-Token':csrf.value},body:body===undefined?undefined:JSON.stringify(body) });
+async function api<T>(url:string,body?:unknown,signal?:AbortSignal):Promise<T> {
+  const response=await fetch(`/api/${url}`,{ method:body===undefined?'GET':'POST',headers:body===undefined?{}:{'Content-Type':'application/json','X-CSRF-Token':csrf.value},body:body===undefined?undefined:JSON.stringify(body),signal });
   const data=await response.json(); if(!response.ok) { if(response.status===401) authenticated.value=false; throw Error(data.error??'Request failed.'); } return data as T;
 }
 async function perform(fn:()=>Promise<unknown>) { busy.value=true; error.value=''; message.value=''; try { await fn(); } catch(e) { error.value=(e as Error).message; } finally { busy.value=false; } }
@@ -32,14 +34,32 @@ async function loadChapters(offset=0) {
   const merged=new Map(knownGroups.value.map(g=>[g.id,g])); chapters.value!.items.flatMap(c=>c.groups).forEach(g=>merged.set(g.id,g)); knownGroups.value=[...merged.values()]; selected.value=[]; preview.value=undefined;
 }
 async function openSeries(series:Series) { await perform(async()=> { detail.value=await api(`series?source=${series.source}&id=${series.id}`); group.value=''; knownGroups.value=[]; chapters.value=undefined; await loadChapters(); }); }
-async function prepare(ids?:string[]) { await perform(async()=> { preview.value=await api('preview',{source:detail.value!.source,seriesId:detail.value!.id,language:language.value,group:group.value||undefined,ids}); confirmTranslations.value=false; }); }
-async function enqueue() { await perform(async()=> { const r=await api<{added:number;duplicates:number}>('enqueue',{token:preview.value!.token,confirmTranslations:confirmTranslations.value}); preview.value=undefined; message.value=`Queued ${r.added} chapter(s); skipped ${r.duplicates} existing job(s).`; await refresh(); }); }
+async function prepare(ids?:string[]) {
+  if(busy.value||!detail.value)return;
+  const controller=new AbortController();previewController=controller;
+  preview.value=undefined;previewError.value='';confirmTranslations.value=false;previewLoading.value=true;busy.value=true;error.value='';message.value='';
+  downloadDialog.value?.showModal();
+  try{preview.value=await api('preview',{source:detail.value.source,seriesId:detail.value.id,language:language.value,group:group.value||undefined,ids},controller.signal);await nextTick();previewHeading.value?.focus();}
+  catch(e){if(!controller.signal.aborted)previewError.value=(e as Error).message;}
+  finally{if(previewController===controller){previewController=undefined;previewLoading.value=false;busy.value=false;}}
+}
+function cancelPreview(event?:Event){
+  if(busy.value&&!previewLoading.value){event?.preventDefault();return;}
+  previewController?.abort();previewController=undefined;previewLoading.value=false;busy.value=false;preview.value=undefined;previewError.value='';downloadDialog.value?.close();
+}
+async function enqueue() {
+  if(!preview.value||busy.value)return;
+  busy.value=true;previewError.value='';
+  try{const r=await api<{added:number;duplicates:number}>('enqueue',{token:preview.value.token,confirmTranslations:confirmTranslations.value});preview.value=undefined;downloadDialog.value?.close();view.value='queue';message.value=`Queued ${r.added} chapter(s); skipped ${r.duplicates} existing job(s).`;await nextTick();window.scrollTo({top:0});await refresh();if(paused.value)message.value+=' Downloads are paused. Select Resume downloads to start.';}
+  catch(e){if(downloadDialog.value?.open)previewError.value=(e as Error).message;else error.value=(e as Error).message;}
+  finally{busy.value=false;}
+}
 async function control(id:string,action:string) { await perform(async()=> { await api(`jobs/${id}`,{action}); await refresh(); }); }
 async function allControl(action:string) { await perform(async()=> { await api('queue',{action}); await refresh(); }); }
 async function save() { await perform(async()=> { const r=await local!.save(JSON.parse(JSON.stringify(config.value)),password.value||undefined); password.value=''; if(!r.ok) throw Error(r.error); adminConfigured.value=true; message.value=r.restartRequired?'Saved. Quit and reopen Bear Cave to apply the new port.':'Saved. Password changes sign out dashboard sessions.'; }); }
 async function pick() { await perform(async()=> { const folder=await local!.pickFolder(); if(folder) config.value!.downloadRoot=folder; }); }
 onMounted(()=> { void perform(async()=> { if(local) { const data=await local.read(); config.value=data.settings; sources.value=data.sources??[]; mangaAccount.value=data.mangaAccount??{connected:false}; for(const s of enabledSources.value)config.value.sourceChapters[s.id]??=s.recommended.chapters; adminConfigured.value=data.adminConfigured; return; } const s=await api<{authenticated:boolean;csrf?:string;setupRequired:boolean}>('session'); authenticated.value=s.authenticated; csrf.value=s.csrf??''; setupRequired.value=s.setupRequired; if(authenticated.value) { sources.value=await api('sources'); await refresh(); } timer=setInterval(()=> { void refresh().catch(e=>{ error.value=(e as Error).message; }); },2000); }); });
-onUnmounted(()=> { if(timer) clearInterval(timer); });
+onUnmounted(()=> { if(timer) clearInterval(timer);previewController?.abort(); });
 </script>
 
 <template>
@@ -91,7 +111,6 @@ onUnmounted(()=> { if(timer) clearInterval(timer); });
               <div class="table-scroll" v-else><table><thead><tr><th><input type="checkbox" aria-label="Select this page" :checked="selected.length===chapters.items.length" @change="selected=($event.target as HTMLInputElement).checked?chapters.items.map(c=>c.id):[]"></th><th>Chapter</th><th>Translation</th><th>Pages</th><th></th></tr></thead><tbody><tr v-for="c in chapters.items" :key="c.id"><td><input v-model="selected" type="checkbox" :value="c.id" :aria-label="`Select chapter ${c.number}`"></td><td><strong>{{ c.volume?`Vol. ${c.volume} · `:'' }}Ch. {{ c.number }}</strong><span>{{ c.title }}</span><small class="mono" :title="c.id">{{ c.id }}</small></td><td>{{ c.language }}<span>{{ c.groups.map(g=>g.name).join(', ')||'No group listed' }}</span></td><td>{{ c.pages ?? "On resolution" }}</td><td><button :disabled="busy" @click="prepare([c.id])">Download</button></td></tr></tbody></table></div>
               <div class="pagination"><button :disabled="busy||chapters.offset===0" @click="perform(()=>loadChapters(Math.max(0,chapters!.offset-chapters!.limit)))">Previous</button><span>{{ chapters.offset+1 }}–{{ Math.min(chapters.offset+chapters.limit,chapters.total) }} of {{ chapters.total }}</span><button :disabled="busy||chapters.offset+chapters.limit>=chapters.total||chapters.offset+chapters.limit*2>10000" @click="perform(()=>loadChapters(chapters!.offset+chapters!.limit))">Next</button></div>
             </div>
-            <div v-if="preview" class="card confirmation" role="dialog" aria-label="Confirm chapter downloads"><h2>Download {{ preview.count }} matching chapter{{ preview.count===1?'':'s' }}?</h2><p>Existing source chapter IDs are skipped. This preview expires in five minutes.</p><label v-if="preview.multipleTranslations" class="check"><input v-model="confirmTranslations" type="checkbox"> I want the {{ preview.multipleTranslations }} additional translation(s) of matching chapter numbers. Otherwise cancel and choose one group.</label><div class="inline"><button :disabled="busy" @click="preview=undefined">Cancel</button><button class="primary" :disabled="busy||!preview.count||Boolean(preview.multipleTranslations&&!confirmTranslations)" @click="enqueue">Confirm {{ preview.count }} downloads</button></div></div>
           </template>
           <template v-else-if="results"><div class="section-bar"><h2>Search results</h2><span class="muted">{{ results.total.toLocaleString() }} titles</span></div><div v-if="!results.items.length" class="empty card">No titles found. Try a shorter title or alternate spelling.</div><div class="result-grid"><button v-for="s in results.items" :key="s.id" class="result card" :disabled="busy" @click="openSeries(s)"><img :src="logoMark" class="book-mark" alt=""><div><span class="eyebrow">{{ s.source }}</span><h2>{{ s.title }}</h2><p>{{ s.description.slice(0,170)||'Open this series to explore its chapters.' }}</p><span class="text-link">Explore chapters →</span></div></button></div><div class="pagination"><button :disabled="busy||!results.offset" @click="search(Math.max(0,results.offset-results.limit))">Previous</button><span>Page {{ Math.floor(results.offset/results.limit)+1 }}</span><button :disabled="busy||results.offset+results.limit>=results.total||results.offset+results.limit*2>10000" @click="search(results.offset+results.limit)">Next</button></div></template>
           <div v-else class="empty card"><img :src="logoMark" class="book-mark" alt=""><h2>Good stories start here.</h2><p>Choose a source and search to find a series. You’ll choose a language and translation before downloading.</p><span class="source-pill">Public downloads · No MangaDex account needed</span></div>
@@ -105,5 +124,16 @@ onUnmounted(()=> { if(timer) clearInterval(timer); });
       </template>
       <footer>BEAR CAVE <span>Made for a slower kind of reading.</span></footer>
     </main>
+    <dialog ref="downloadDialog" class="download-dialog" aria-labelledby="download-title" :aria-busy="previewLoading || busy" @cancel="cancelPreview">
+      <h2 id="download-title" ref="previewHeading" tabindex="-1">{{ previewLoading ? 'Checking chapter availability…' : preview ? `Download ${preview.count} matching chapter${preview.count===1?'':'s'}?` : 'Could not prepare this download' }}</h2>
+      <p v-if="previewLoading" role="status">Counting the matching chapters before adding them to your queue. You can cancel while this runs.</p>
+      <div v-if="previewError" class="notice error" role="alert">{{ previewError }}</div>
+      <template v-if="preview && !previewLoading">
+        <p>Existing source chapter IDs are skipped. This preview expires in five minutes.</p>
+        <p v-if="!preview.count">No downloadable chapters match this selection. Close this dialog and adjust the filters.</p>
+        <label v-if="preview.multipleTranslations" class="check"><input v-model="confirmTranslations" type="checkbox"> I want the {{ preview.multipleTranslations }} additional translation(s) of matching chapter numbers. Otherwise cancel and choose one group.</label>
+      </template>
+      <div class="dialog-actions"><button type="button" :disabled="busy && !previewLoading" @click="cancelPreview()">{{ previewError ? 'Close' : 'Cancel' }}</button><button v-if="preview && !previewLoading" type="button" class="primary" :disabled="busy || !preview.count || Boolean(preview.multipleTranslations && !confirmTranslations)" @click="enqueue">{{ busy ? 'Adding to queue…' : `Confirm ${preview.count} downloads` }}</button></div>
+    </dialog>
   </div>
 </template>
