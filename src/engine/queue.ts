@@ -60,8 +60,8 @@ export class Queue {
       signal.throwIfAborted();
       if (!await output.has(i)) {
         try {
-          const bytes = await this.pool.run(() => this.http.get(resolved.urls[i],adapter.manifest.imageHosts,signal,true),signal);
-          signal.throwIfAborted(); await output.page(i,bytes);
+          const bytes = await this.pool.run(() => adapter.readPage ? adapter.readPage(resolved.urls[i],signal) : this.http.get(resolved.urls[i],adapter.manifest.imageHosts,signal,true),signal);
+          signal.throwIfAborted(); await output.page(i,Buffer.from(bytes));
         } catch (e) {
           if (e instanceof SourceError && e.kind === 'expired' && refreshes++ < 2) {
             const next = await adapter.resolve(job.chapter.id,signal);

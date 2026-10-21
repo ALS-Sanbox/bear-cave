@@ -1,5 +1,5 @@
 // Run with: npm run test:electron (after npm run build). No persistent user data is touched.
-const {app,BrowserWindow,ipcMain,safeStorage}=require('electron');
+const {app,BrowserWindow,ipcMain,safeStorage,session}=require('electron');
 const fs=require('node:fs');
 const os=require('node:os');
 const path=require('node:path');
@@ -18,10 +18,12 @@ app.whenReady().then(async()=>{
   const {hashPassword}=await import(pathToFileURL(path.resolve('dist/main/server/auth.js')).href);
   db=new Store(path.join(temp,'test.sqlite'));const settings=defaults(temp);
   db.set('admin-hash',await hashPassword('temporary integration password'));
-  const registry=new Registry([]);queue=new Queue(db,registry,()=>settings);
+  const registry=new Registry();queue=new Queue(db,registry,()=>settings);
   server=createDashboard(db,queue,registry,()=>settings,path.resolve('dist/ui'));const port=await server.listen(0);
   assert(safeStorage.isEncryptionAvailable(),'Windows secure storage must be available');
   assert.equal(safeStorage.decryptString(safeStorage.encryptString('temporary secret')),'temporary secret');
+  const {SecretVault}=await import(pathToFileURL(path.resolve('dist/main/desktop/secrets.js')).href);const vault=new SecretVault(path.join(temp,'secrets'));await vault.put('fixture','not-a-real-secret');assert(!fs.readFileSync(path.join(temp,'secrets','fixture.dpapi')).includes(Buffer.from('not-a-real-secret')));assert.equal(await vault.get('fixture'),'not-a-real-secret');await vault.remove('fixture');assert(!fs.existsSync(path.join(temp,'secrets','fixture.dpapi')));
+  const {BrowserSessions}=await import(pathToFileURL(path.resolve('dist/main/desktop/sessions.js')).href);const sourceSessions=new BrowserSessions();await session.fromPartition('persist:source-toongod').cookies.set({url:'https://www.toongod.org/',name:'fixture-isolation',value:'toongod-only',secure:true});assert((await sourceSessions.cookies('toongod',new URL('https://www.toongod.org/'))).includes('toongod-only'));assert.equal(await sourceSessions.cookies('thunder',new URL('https://www.toongod.org/')),'');assert.equal(await sourceSessions.cookies('toongod',new URL('https://en-thunderscans.com/')),'');
   const local=new BrowserWindow({show:false,webPreferences:{preload:path.resolve('dist/main/desktop/preload.cjs'),sandbox:true,contextIsolation:true,nodeIntegration:false}});
   ipcMain.handle('local:read',()=>({settings,adminConfigured:true}));
   await local.loadFile(path.resolve('dist/ui/index.html'));
@@ -39,7 +41,9 @@ app.whenReady().then(async()=>{
   assert((await remote.webContents.executeJavaScript('document.body.innerText')).includes('Find your next chapter.'));
   await remote.webContents.executeJavaScript(`Array.from(document.querySelectorAll('nav button')).find(b=>b.textContent.includes('Sources')).click()`);
   await new Promise(r=>setTimeout(r,100));
-  assert((await remote.webContents.executeJavaScript('document.body.innerText')).includes('Planned'));
+  assert((await remote.webContents.executeJavaScript('document.body.innerText')).includes('ToonGod'));
+  assert.equal(await remote.webContents.executeJavaScript('document.querySelectorAll(".source-grid article").length'),6);
+  assert(await remote.webContents.executeJavaScript('Array.from(document.images).every(i=>i.complete && i.naturalWidth>0)'));
   console.log('Electron smoke passed: native SQLite, DPAPI roundtrip, sandboxed preload, local settings rendering, remote login, dashboard and sources.');
   local.destroy();remote.destroy();await server.close();await queue.stop();db.close();app.exit(0);
 }).catch(async e=>{console.error(e);try{await server?.close();await queue?.stop();db?.close();}catch{}app.exit(1);});

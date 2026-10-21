@@ -2,7 +2,7 @@
 
 A standalone Windows tray manga downloader with an authenticated Vue web dashboard. Windows owns the server, queue, SQLite database, sessions and downloads. No Lions Library, Docker or Linux server is needed.
 
-MangaDex works in Phase 1. ToonGod, Asura Scans, Flame Comics, WEBTOON and ThunderScans are planned and disabled.
+Version 0.2.0 enables MangaDex, Asura Scans, Flame Comics, ThunderScans, WEBTOON and ToonGod. ToonGod currently requires local human verification and its live reader remains unverified. The other newly added sources passed public search/chapter/image smoke tests. See [current source status](docs/source-status.md).
 
 ## Windows development
 
@@ -28,13 +28,14 @@ npm.cmd run test:electron
 npm.cmd run dist:win
 ```
 
-Installer: `release\Bear Cave Setup 0.1.0.exe`. NSIS supports per-user installation and a selectable folder. The build downloads tooling but does not publish or install. It is unsigned and uses the default Electron application icon. Signing needs your certificate; automatic updates are deferred.
+Installer: `release\Bear Cave Setup 0.2.0.exe`. NSIS supports per-user installation and a selectable folder. The build downloads tooling but does not publish or install. It is unsigned and uses the supplied Bear Cave mark as its application icon. Signing needs your certificate; automatic updates are deferred. The supplied text logo appears on the dashboard and login screen; both originals remain in images/.
 
 Explicit live check (not part of automated fixture tests):
 
 ```powershell
 npm.cmd run smoke:mangadex
 npm.cmd run smoke:mangadex -- "Azumanga"
+npm.cmd run smoke:sources -- asura flame thunder webtoon
 ```
 
 This checks up to five search results and one real image in memory. It does not download a whole chapter.
@@ -48,9 +49,9 @@ This checks up to five search results and one real image in memory. It does not 
 
 ## Data and remote access
 
-SQLite (`bear-cave.sqlite` plus WAL/SHM), generic `bear-cave.log`, Chromium data and future isolated profiles live in Electron `userData`: usually `%APPDATA%\Bear Cave` packaged, possibly `%APPDATA%\bear-cave` in development. Downloads default to `Bear Cave Downloads` inside Windows Documents. Local Settings shows the configured folder. Data remains outside the repository/resources; UNC download shares are rejected.
+SQLite (`bear-cave.sqlite` plus WAL/SHM), generic `bear-cave.log`, Chromium data and isolated source profiles live in Electron `userData`: normally `%APPDATA%\Bear Cave`. Downloads default to `Bear Cave Downloads` inside Windows Documents. Local Settings shows the configured folder. Data remains outside the repository/resources; UNC download shares are rejected.
 
-Passwords use salted scrypt hashes. Future adapter secrets use Windows-backed Electron safeStorage; Phase 1 collects no source credentials. Logs omit passwords, bodies and temporary page URLs. No remote settings export or filesystem browser exists. Replace a forgotten password using local Settings. Quit before backing up SQLite. Jobs retain the root/format selected at enqueue time; changed settings affect new jobs.
+Dashboard passwords use salted scrypt hashes. Optional MangaDex login uses an approved personal-client ID/secret and its owner's credentials, entered only in local Settings. Its password is never saved; tokens/client secret use Windows-backed Electron safeStorage. See [account setup](docs/accounts.md). Logs omit passwords, bodies and temporary page URLs. No remote settings export or filesystem browser exists. Replace a forgotten dashboard password using local Settings. Quit before backing up SQLite. Jobs retain their original root/format; changed settings affect new jobs.
 
 The HTTP server binds only to `127.0.0.1`. For remote access, set the exact HTTPS public URL and enable tunnel trust locally, then configure Cloudflare Tunnel separately. No external services are configured automatically.
 
@@ -59,4 +60,6 @@ The HTTP server binds only to `127.0.0.1`. For remote access, set the exact HTTP
 - [Remote access](docs/remote-access.md)
 - [Manual checklist](docs/manual-test-checklist.md)
 - [Phase status and limits](docs/phase-status.md)
+- [Current source status](docs/source-status.md)
+- [MangaDex login and local source sessions](docs/accounts.md)
 - [Official docs and licenses](docs/references.md)

@@ -18,7 +18,7 @@ export class Store {
     const existing = this.db.prepare('SELECT data FROM jobs WHERE source=? AND chapter_id=?').get(chapter.source, chapter.id);
     if (existing) return { job: JSON.parse(String(existing.data)), duplicate: true };
     const now = new Date().toISOString();
-    const job: Job = { id: randomUUID(), source: chapter.source, series, chapter, state: 'queued', done: 0, total: chapter.pages, attempts: 0, error: null, output: null, created: now, updated: now, root: settings.downloadRoot, format: settings.format };
+    const job: Job = { id: randomUUID(), source: chapter.source, series, chapter, state: 'queued', done: 0, total: chapter.pages ?? 0, attempts: 0, error: null, output: null, created: now, updated: now, root: settings.downloadRoot, format: settings.format };
     this.db.prepare('INSERT INTO jobs VALUES (?,?,?,?,?)').run(job.id, job.source, chapter.id, job.state, JSON.stringify(job)); return { job, duplicate: false };
   }
   update(id: string, patch: Partial<Job>): Job {

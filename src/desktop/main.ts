@@ -5,7 +5,11 @@ import { mkdir, appendFile } from 'node:fs/promises';
 import { z } from 'zod';
 import { Store } from '../core/store.js';
 import { defaults, settingsSchema, validateRoot } from '../core/settings.js';
-import { Registry } from '../sources/registry.js';
+import { Registry, websiteAdapters } from '../sources/registry.js';
+import {MangaDex}from'../sources/mangadex.js';
+import {sharedHttp}from'../sources/http.js';
+import {MangaDexAccount}from'../sources/mangadex-account.js';
+import {SecretVault}from'./secrets.js';
 import { Queue } from '../engine/queue.js';
 import { createDashboard } from '../server/server.js';
 import { hashPassword } from '../server/auth.js';
@@ -20,15 +24,13 @@ const uiFile = path.resolve(here,'../../ui/index.html');
 async function log(event: string) { if (logFile) await appendFile(logFile,`${new Date().toISOString()} ${event}\n`).catch(()=>{}); }
 async function showSettings() {
   if (settingsWindow) { settingsWindow.show(); settingsWindow.focus(); return; }
-  const w = new BrowserWindow({ width: 790,height: 850,title: 'Bear Cave — Local settings',autoHideMenuBar: true,webPreferences: { preload: path.join(here,'preload.cjs'),nodeIntegration: false,contextIsolation: true,sandbox: true } });
+  const w = new BrowserWindow({ width: 790,height: 850,title: 'Bear Cave — Local settings',icon:path.resolve(here,'../../branding/app.png'),autoHideMenuBar: true,webPreferences: { preload: path.join(here,'preload.cjs'),nodeIntegration: false,contextIsolation: true,sandbox: true } });
   settingsWindow = w; w.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
   w.webContents.on('will-navigate',event=>event.preventDefault()); w.on('close',event=> { if (!quitting) { event.preventDefault(); w.hide(); } });
   w.on('closed',()=> { settingsWindow = undefined; }); await w.loadFile(uiFile);
 }
 function icon() {
-  const size = 32, pixels = Buffer.alloc(size*size*4);
-  for (let y=0;y<size;y++) for(let x=0;x<size;x++) { const head = (x-16)**2+(y-18)**2 < 155; const ears = (x-6)**2+(y-6)**2 < 24 || (x-26)**2+(y-6)**2 < 24; const eye = (x-11)**2+(y-15)**2 < 3 || (x-21)**2+(y-15)**2 < 3; const nose = (x-16)**2+(y-23)**2 < 8; const i=(y*size+x)*4; if(head||ears) { pixels[i]=eye||nose?25:53; pixels[i+1]=eye||nose?35:97; pixels[i+2]=eye||nose?35:141; pixels[i+3]=255; } }
-  return nativeImage.createFromBitmap(pixels,{ width:size,height:size });
+  const image=nativeImage.createFromPath(path.resolve(here,'../../branding/tray.png'));if(image.isEmpty())throw Error('Tray branding asset is missing. Run the build first.');return image;
 }
 async function shutdown() {
   if (quitting) return; quitting=true;
@@ -47,11 +49,15 @@ else {
     const forbidden = [app.getAppPath(),process.resourcesPath];
     // A missing/unwritable folder is fixable through local settings; don't lose the tray or queue.
     try { settings.downloadRoot = await validateRoot(settings.downloadRoot,forbidden); } catch { store.set('queue-paused',true); dialog.showErrorBox('Download folder unavailable','Downloads are paused. Choose a writable local folder in Settings. Existing jobs retain their original destinations.'); }
-    const registry = new Registry(); queue = new Queue(store,registry,()=>settings);
+    const registry = new Registry([new MangaDex(sharedHttp),...websiteAdapters((id,url)=>sessions.cookies(id,url))]); queue = new Queue(store,registry,()=>settings);
+    const mangaAccount=new MangaDexAccount(new SecretVault(path.join(data,'secrets')));
     dashboard = createDashboard(store,queue,registry,()=>settings,path.dirname(uiFile));
     try { const port = await dashboard.listen(); localUrl=`http://127.0.0.1:${port}`; }
     catch(e) { const code=(e as NodeJS.ErrnoException).code; if(!['EADDRINUSE','EACCES'].includes(code??''))throw e; store.set('queue-paused',true); await log(`Dashboard listener unavailable: ${code}`); dialog.showErrorBox('Dashboard port unavailable',`Cannot listen on dashboard port ${settings.port}. Downloads are paused. Choose an unused port in local Settings, save, then Quit and reopen Bear Cave.`); }
-    ipcMain.handle('local:read',event=> { trusted(event); return { settings,sources:registry.manifests(),adminConfigured: Boolean(store!.get('admin-hash')) }; });
+    ipcMain.handle('local:read',async event=> { trusted(event); return { settings,sources:registry.manifests(),mangaAccount:await mangaAccount.status(),adminConfigured: Boolean(store!.get('admin-hash')) }; });
+    ipcMain.handle('local:manga-connect',async(event,input:unknown)=>{trusted(event);try{return{ok:true,status:await mangaAccount.connect(input)};}catch(e){return{ok:false,error:e instanceof Error?e.message:'MangaDex login failed.'};}});
+    ipcMain.handle('local:manga-disconnect',async event=>{trusted(event);try{return{ok:true,status:await mangaAccount.disconnect()};}catch{return{ok:false,error:'Account is busy or secure storage is unavailable. Try again.'};}});
+    ipcMain.handle('local:source-session',async(event,id:unknown)=>{trusted(event);await sessions.open(registry.get(z.string().regex(/^[a-z][a-z0-9-]{0,29}$/).parse(id)));return{ok:true};});
     ipcMain.handle('local:folder',async event=> { trusted(event); const r=await dialog.showOpenDialog(settingsWindow!,{ properties:['openDirectory','createDirectory'] }); return r.canceled ? null : r.filePaths[0]; });
     ipcMain.handle('local:save',async(event,input: unknown)=> {
       trusted(event);

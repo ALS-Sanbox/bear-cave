@@ -38,7 +38,7 @@ export class MangaDex implements SourceAdapter {
     uuid.parse(id);
     const chapter = await this.chapter(id, signal);
     if (chapter.external) throw new SourceError('This chapter is hosted externally and cannot be downloaded by the MangaDex connector.');
-    if (chapter.pages <= 0) throw new SourceError('This chapter has no available pages.');
+    if (chapter.pages === null || chapter.pages <= 0) throw new SourceError('This chapter has no available pages.');
     const r = z.object({ baseUrl: z.string().url(), chapter: z.object({ hash: z.string().regex(/^[a-f0-9]+$/i), data: z.array(z.string().regex(/^[a-zA-Z0-9_.-]+$/)).min(1).max(2000) }) }).parse(await this.api(`/at-home/server/${id}`, new URLSearchParams({ forcePort443: 'true' }), signal));
     return { revision: r.chapter.hash, urls: r.chapter.data.map(file => `${r.baseUrl}/data/${r.chapter.hash}/${encodeURIComponent(file)}`) };
   }

@@ -16,6 +16,9 @@ Automated checks do not replace these deployment checks. Use a small available c
 - [ ] Use a disposable small test volume to check disk-full behavior; restore space then Retry. Separately test loss/restoration of download-folder permissions. Staging should remain recoverable.
 - [ ] Stop network access during a chapter, restore it and Retry. Authentication/challenge responses should hold affected source jobs as action_required; no endless retries.
 - [ ] Configure your own Cloudflare Tunnel using remote-access.md. Visit from another device at HTTPS. Inspect Secure/HttpOnly/SameSite cookies, verify remote login/search/download/control and local-only functions remain unavailable.
-- [ ] Test phone-width dashboard, keyboard navigation, errors and empty states. Planned sources remain visibly disabled.
+- [ ] Test phone-width dashboard, keyboard navigation, errors and empty states. All six connectors appear; ToonGod's verification/unvalidated-reader notice remains visible.
+- [ ] In local Settings sign into MangaDex using your approved personal client and owner credentials. Verify username, restart persistence, refresh and Remove saved account. Confirm no password is saved and no token/client secret is returned to the UI/API.
+- [ ] Open isolated source windows from the tray/local Settings, complete legitimate interaction manually and retry. Confirm profiles stay distinct and remote callers cannot open/control them. ToonGod's live reader remains an outstanding manual validation.
+- [ ] Verify supplied branding in dashboard/login, local window, tray and installed application/shortcut. Use one real public chapter from each source before bulk downloading; never assume paid/app-only episodes are available.
 
 The implementation session built an installer and exercised hidden Electron windows, SQLite, DPAPI, actual main startup/IPC, close-to-tray, second-instance reuse, port-conflict recovery and clean Quit on Windows. It did not install the app, exercise interactive tray/dialog clicks or Windows login, deploy a tunnel, or download/read a whole live chapter. Mark these items only after actually performing them.

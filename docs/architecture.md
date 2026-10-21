@@ -4,7 +4,7 @@ Electron owns the SQLite store, registry, scheduler, HTTP server and tray. Only 
 
 | Module | Responsibility |
 | --- | --- |
-| src/desktop | Tray, single instance, local IPC, future sessions, DPAPI vault |
+| src/desktop | Tray, single instance, local IPC, isolated source sessions, DPAPI vault |
 | src/core | SQLite and settings validation |
 | src/server | HTTP API/assets, password/session/CSRF, host/origin checks, count previews |
 | src/engine | Chapter scheduler, page semaphore, output staging/validation |
@@ -24,6 +24,6 @@ Completion requires revalidating every page. Folders are renamed and checked. CB
 
 HTTP exposes no setup/settings/folder-picker/browser-control/arbitrary-fetch endpoint. Local IPC checks window, sender, main frame and exact bundled file URL. Remote windows have sandboxing, context isolation, Node disabled and no preload. Passwords use scrypt N=32768/r=8/p=1, 16-byte salt and 64-byte key. Memory-only random sessions expire in twelve hours and are revoked on password change/restart. Login limits are global: five attempts/fifteen minutes, at most two concurrent hash operations.
 
-Source fetches allow declared HTTPS hosts/443 only. Every redirect and DNS result is checked. Public IPv4 addresses are pinned in actual TLS connections; private, local, link-local, multicast and special-use ranges are blocked. IPv6 is conservatively disabled. No authorization/cookies are forwarded to image hosts. Response size/socket timeouts and AbortSignal bound work. Browser sessions are a future scaffold requiring dedicated security/transport validation before a browser source ships.
+Source fetches allow declared HTTPS hosts/443 only. Every redirect and DNS result is checked. Public IPv4 addresses are pinned in actual TLS connections; private, local, link-local, multicast and special-use ranges are blocked. IPv6 is conservatively disabled. MangaDex authorization never reaches images. Website cookies are scoped to their own approved website origin and excluded from unrelated CDN hosts. Response size/socket timeouts and AbortSignal bound work. Local isolated browser sessions check allowed hosts and public DNS before navigation; unlike Node requests, Chromium connections are not DNS-pinned. Cookie reuse does not guarantee protected-site access; ToonGod remains unverified against its live reader.
 
 The local Windows account and loopback tunnel daemon are trusted. DPAPI protects against other Windows users, not same-user malware. Hostile same-user filesystem races and compromised local processes are outside this threat boundary.

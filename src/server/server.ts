@@ -12,7 +12,7 @@ import { Auth } from './auth.js';
 
 class ApiError extends Error { constructor(public status: number,message: string) { super(message); } }
 interface Preview { session: string; expires: number; series: Series; chapters: Chapter[]; multipleTranslations: number }
-const opaqueId=z.string().min(1).max(200).regex(/^[a-zA-Z0-9_-]+$/);
+const opaqueId=z.string().min(1).max(1200).regex(/^[a-zA-Z0-9_-]+$/);
 export function createDashboard(store: Store, queue: Queue, registry: Registry, settings: () => Settings, uiDir: string) {
   const auth = new Auth(store), previews = new Map<string,Preview>(); let busyPreviews = 0; let reads: number[] = [];
   const send = (res: ServerResponse,status: number,data: unknown) => { res.writeHead(status,{ 'Content-Type': 'application/json; charset=utf-8' }); res.end(JSON.stringify(data)); };
@@ -71,7 +71,7 @@ export function createDashboard(store: Store, queue: Queue, registry: Registry, 
           try {
             const adapter = registry.get(data.source), series = await adapter.series(data.seriesId,abort.signal); const chapters: Chapter[] = []; let offset = 0;
             do { const page = await adapter.chapters(data.seriesId,data,offset,abort.signal); chapters.push(...page.items); offset += page.limit; if (offset >= page.total) break; if (offset + page.limit > 10000) throw new ApiError(400,'Too many matching chapters. Narrow the language/group filter.'); } while (true);
-            const unique = [...new Map(chapters.map(c => [c.id,c])).values()].filter(c => !c.external && c.pages > 0 && c.source===data.source && c.seriesId===data.seriesId && (!data.ids || data.ids.includes(c.id)));
+            const unique = [...new Map(chapters.map(c => [c.id,c])).values()].filter(c => !c.external && c.pages !== 0 && c.source===data.source && c.seriesId===data.seriesId && (!data.ids || data.ids.includes(c.id)));
             if (data.ids && data.ids.some(id => !unique.some(c => c.id === id))) throw new ApiError(400,'Some selected chapters no longer match or are unavailable. Refresh the list.');
             const logical = new Set<string>(); let multipleTranslations = 0;
             for (const c of unique) { const key = `${c.volume}|${c.number}|${c.language}`; if (logical.has(key)) multipleTranslations++; logical.add(key); }
@@ -94,8 +94,8 @@ export function createDashboard(store: Store, queue: Queue, registry: Registry, 
       if (!['GET','HEAD'].includes(method)) throw new ApiError(405,'Method not allowed.');
       const name = url.pathname === '/' ? 'index.html' : url.pathname.slice(1);
       // Serve only build assets; never fall back to arbitrary paths or application data.
-      if (name !== 'index.html' && !/^assets\/[a-zA-Z0-9_.-]+\.(js|css)$/.test(name)) throw new ApiError(404,'Not found.');
-      const file = await readFile(path.join(uiDir,name)); res.setHeader('Content-Type',name.endsWith('.js') ? 'text/javascript' : name.endsWith('.css') ? 'text/css' : 'text/html; charset=utf-8'); res.end(method === 'HEAD' ? undefined : file);
+      if (name !== 'index.html' && !/^assets\/[a-zA-Z0-9_.-]+\.(js|css|png)$/.test(name)) throw new ApiError(404,'Not found.');
+      const file = await readFile(path.join(uiDir,name)); res.setHeader('Content-Type',name.endsWith('.js') ? 'text/javascript' : name.endsWith('.css') ? 'text/css' : name.endsWith('.png')?'image/png':'text/html; charset=utf-8'); res.end(method === 'HEAD' ? undefined : file);
     } catch (e) {
       if (res.headersSent || res.destroyed) return;
       const status = e instanceof ApiError ? e.status : e instanceof z.ZodError ? 400 : e instanceof SourceError ? 502 : 400;

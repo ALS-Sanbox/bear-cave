@@ -8,3 +8,5 @@ coverage/
 !.env.example
 *.log
 *.tsbuildinfo
+build/branding/
+src/ui/assets/logo-*.png
