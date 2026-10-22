@@ -11,7 +11,7 @@ export class Asura extends WebsiteSource {
         const data=astroProps(await this.page(url,signal),'BrowseFilters');
         if(!Array.isArray(data.initialSeries)||!Number.isInteger(data.totalCount)||!Number.isInteger(data.initialTotalPages))throw new SourceError('Asura search pagination data changed.');
         if(page===1){pages=Math.max(1,data.initialTotalPages);total=data.totalCount;if(pages>500||total>10000)throw new SourceError('Too many Asura search results. Narrow the title.');}
-        for(const item of data.initialSeries){if(typeof item.public_url!=='string'||typeof item.title!=='string')throw new SourceError('Asura search identity data changed.');const id=encodePath(this.path(item.public_url));found.set(id,{id,source:'asura',title:item.title,description:text(item.description??'')});}
+        for(const item of data.initialSeries){if(typeof item.public_url!=='string'||typeof item.title!=='string')throw new SourceError('Asura search identity data changed.');const id=encodePath(this.path(item.public_url));found.set(id,{id,source:'asura',title:item.title,description:text(item.description??''),coverRef:this.coverReference(item.cover??item.cover_url)});}
       }
       if(found.size!==total)throw new SourceError('Asura search results changed while counting. Retry the search.');
       return[...found.values()];

@@ -19,10 +19,10 @@ export class Auth {
   async login(password: string): Promise<Session> {
     this.failures = this.failures.filter(t => Date.now()-t < 15*60*1000);
     if (this.failures.length >= 5 || this.pending >= 2) throw Error('Too many login attempts. Wait 15 minutes.');
-    this.failures.push(Date.now()); this.pending++;
+    this.pending++;
     try {
       const hash = this.store.get<string>('admin-hash');
-      if (!hash || !await verifyPassword(password,hash)) throw Error('Dashboard sign-in failed. Use the administrator password set in Bear Cave tray Settings. To set a new password, open Settings, enter a new administrator password and Save.');
+      if (!hash || !await verifyPassword(password,hash)) { this.failures.push(Date.now()); throw Error('Dashboard sign-in failed. Use the administrator password set in Bear Cave tray Settings. To set a new password, open Settings, enter a new administrator password and Save.'); }
       for (const [id,s] of this.sessions) if (s.expires <= Date.now()) this.sessions.delete(id);
       if (this.sessions.size >= 32) this.sessions.delete(this.sessions.keys().next().value!);
       const s = { id: randomBytes(32).toString('hex'), csrf: randomBytes(32).toString('hex'), expires: Date.now()+12*60*60*1000 };

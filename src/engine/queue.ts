@@ -17,13 +17,14 @@ export class PagePool {
 export class Queue {
   private active = new Map<string,{ controller: AbortController; promise: Promise<void> }>();
   private timer?: ReturnType<typeof setInterval>; private stopping = false;
+  private maintaining=false;
   readonly pool: PagePool;
   constructor(readonly store: Store, private registry: Registry, private settings: () => Settings, private http: Pick<SafeHttp,'get'> = sharedHttp, private worker?: (job: Job, signal: AbortSignal) => Promise<string>) { this.pool = new PagePool(() => this.settings().pageRequests); }
   start() { this.timer = setInterval(() => this.tick(),150); this.tick(); }
   tick() {
-    if (this.stopping || this.store.get<boolean>('queue-paused')) return;
+    if (this.stopping || this.maintaining || this.store.get<boolean>('queue-paused')||this.active.size>=this.settings().globalChapters) return;
     const s = this.settings();
-    for (const j of this.store.states('queued').reverse()) {
+    for (const j of this.store.queued()) {
       const blocked=this.store.get<string>(`source-action:${j.source}`);
       if(blocked) { this.store.update(j.id,{state:'action_required',error:blocked}); continue; }
       if (this.active.size >= s.globalChapters) break;
@@ -53,7 +54,7 @@ export class Queue {
   }
   private async download(job: Job, signal: AbortSignal): Promise<string> {
     const adapter = this.registry.get(job.source); let resolved = await adapter.resolve(job.chapter.id,signal);
-    const output = new ChapterOutput(job); await output.open(resolved.revision,resolved.urls.length);
+    const output = new ChapterOutput(job,this.store); await output.open(resolved.revision,resolved.urls.length,resolved.identities);
     this.store.update(job.id,{ total: resolved.urls.length, done: 0 });
     let refreshes = 0;
     for (let i = 0; i < resolved.urls.length; i++) {
@@ -73,9 +74,10 @@ export class Queue {
       }
       this.store.update(job.id,{ done: i + 1 });
     }
-    signal.throwIfAborted(); return output.finish();
+    signal.throwIfAborted(); return output.finish(signal);
   }
   control(id: string, action: 'pause'|'resume'|'cancel'|'retry'):void|Promise<void> {
+    if(this.maintaining&&['resume','retry'].includes(action))throw Error('Local staging maintenance is running. Try again shortly.');
     const j = this.store.job(id); if (!j) throw Error('Unknown job');
     if (j.state === 'completed') throw Error('Completed jobs cannot be changed.');
     if (action === 'pause') { if (!['running','queued'].includes(j.state)) throw Error('Only active jobs can be paused.'); this.store.update(id,{ state: 'paused' }); this.active.get(id)?.controller.abort(); }
@@ -89,6 +91,12 @@ export class Queue {
     this.tick();
   }
   async clearFailed() { await Promise.all(this.store.states('failed').flatMap(j=>this.active.get(j.id)?.promise??[]));return this.store.clearFailed(); }
+  async maintenance<T>(work:()=>Promise<T>){if(this.maintaining)throw Error('Maintenance is already running.');this.maintaining=true;this.store.maintenanceActive=true;try{return await work();}finally{this.store.maintenanceActive=false;this.maintaining=false;this.tick();}}
+  async retrySource(source:string){const affected=this.store.states('action_required').filter(j=>j.source===source);await Promise.all(affected.flatMap(j=>this.active.get(j.id)?.promise??[]));this.store.set(`source-action:${source}`,null);for(const j of affected)if(this.store.job(j.id)?.state==='action_required')this.store.update(j.id,{state:'queued',error:null});this.tick();return affected.length;}
+  async group(source:string,series:string,action:'pause'|'resume'|'retry'|'remove'){
+    const jobs=this.store.seriesJobs(source,series).filter(j=>j.state!=='completed');if(action==='remove')return this.remove(jobs.map(j=>j.id));
+    let changed=0;for(const j of jobs){if(action==='pause'&&!['queued','running'].includes(j.state)||action==='resume'&&j.state!=='paused'||action==='retry'&&!['failed','action_required','cancelled'].includes(j.state))continue;await this.control(j.id,action);changed++;}return changed;
+  }
   async remove(ids:string[]) {
     const jobs=ids.map(id=>this.store.job(id)).filter((j):j is Job=>Boolean(j)&&j!.state!=='completed');
     for(const j of jobs){this.store.update(j.id,{state:'cancelled'});this.active.get(j.id)?.controller.abort();}

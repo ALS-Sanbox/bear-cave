@@ -10,12 +10,20 @@ import type { Settings, Chapter, Series } from '../shared/types.js';
 import { SourceError } from '../shared/types.js';
 import { Auth } from './auth.js';
 import { saveCover } from '../engine/files.js';
+import { CoverCache } from './covers.js';
+import { FollowScheduler } from '../engine/follows.js';
+import { verifyOutput,redownload } from '../engine/verification.js';
+import { matching,selectionSummary,enqueueSelection } from '../engine/selection.js';
+const publicSeries=({coverRef,...s}:Series)=>s;
+const publicJob=({root,seriesFolder,previousOutputs,output,...j}:import('../shared/types.js').Job)=>({...j,series:publicSeries(j.series),output:output?path.basename(output):null});
 
 class ApiError extends Error { constructor(public status: number,message: string) { super(message); } }
 interface Preview { session: string; expires: number; series: Series; chapters: Chapter[]; multipleTranslations: number }
 const opaqueId=z.string().min(1).max(1200).regex(/^[a-zA-Z0-9_-]+$/);
 export function createDashboard(store: Store, queue: Queue, registry: Registry, settings: () => Settings, uiDir: string) {
   const auth = new Auth(store), previews = new Map<string,Preview>(); let busyPreviews = 0; let reads: number[] = [];
+  const covers=new CoverCache(registry),follows=new FollowScheduler(store,registry,queue,settings);let verifying=0;
+  const previewFor=(session:string,series:Series,chapters:Chapter[])=>{for(const [id,p]of previews)if(p.expires<Date.now()||p.session===session)previews.delete(id);const summary=selectionSummary(store,series.source,chapters),token=randomBytes(24).toString('hex');previews.set(token,{session,series,chapters,multipleTranslations:summary.multipleTranslations,expires:Date.now()+300000});return{token,...summary,expiresInSeconds:300};};
   const send = (res: ServerResponse,status: number,data: unknown) => { res.writeHead(status,{ 'Content-Type': 'application/json; charset=utf-8' }); res.end(JSON.stringify(data)); };
   async function body(req: IncomingMessage): Promise<unknown> {
     if (!req.headers['content-type']?.startsWith('application/json')) throw new ApiError(415,'JSON request required.');
@@ -51,17 +59,39 @@ export function createDashboard(store: Store, queue: Queue, registry: Registry, 
         if (!session) throw new ApiError(401,'Please log in.');
         if (changing && req.headers['x-csrf-token'] !== session.csrf) throw new ApiError(403,'CSRF token is missing or invalid.');
         if (method === 'POST' && url.pathname === '/api/logout') { auth.sessions.delete(session.id); res.setHeader('Set-Cookie',cookie('',0)); return send(res,200,{ ok: true }); }
-        if (method === 'GET' && url.pathname === '/api/sources') return send(res,200,registry.manifests());
-        if (method === 'GET' && url.pathname === '/api/jobs') return send(res,200,{ paused: Boolean(store.get('queue-paused')), jobs: store.jobs().map(({ root,output,...job }) => ({ ...job, output: output ? path.basename(output) : null })) });
+        if (method === 'GET' && url.pathname === '/api/sources') return send(res,200,registry.manifests().map(m=>({...m,hold:store.holds().find(h=>h.source===m.id)??null})));
+        if(method==='GET'&&url.pathname==='/api/jobs'){
+          const history=url.searchParams.get('history')==='true',offset=z.coerce.number().int().min(0).max(10000000).parse(url.searchParams.get('offset')??0),limit=z.coerce.number().int().min(1).max(100).parse(url.searchParams.get('limit')??100);
+          const page=store.list({history,offset,limit,source:url.searchParams.get('source')||undefined,state:url.searchParams.get('state')||undefined,search:(url.searchParams.get('q')??'').slice(0,200)});
+          return send(res,200,{...page,jobs:page.jobs.map(publicJob),counts:store.counts(),holds:store.holds(),paused:Boolean(store.get('queue-paused'))});
+        }
+        if(method==='GET'&&url.pathname==='/api/cover-image'){
+          const source=z.string().max(30).parse(url.searchParams.get('source')),id=opaqueId.parse(url.searchParams.get('id'));
+          try{const bytes=await covers.get(source,id);res.writeHead(200,{'Content-Type':'image/png','Cache-Control':'private, max-age=300'});return res.end(bytes);}catch{throw new ApiError(404,'Cover unavailable.');}
+        }
+        if(method==='POST'&&url.pathname==='/api/source-retry'){const {source}=z.object({source:z.string().max(30)}).strict().parse(await body(req));registry.get(source);return send(res,200,{requeued:await queue.retrySource(source)});}
+        if(method==='POST'&&url.pathname==='/api/jobs/group'){const data=z.object({source:z.string().max(30),series:opaqueId,action:z.enum(['pause','resume','retry','remove'])}).strict().parse(await body(req));return send(res,200,{changed:await queue.group(data.source,data.series,data.action)});}
+        if(method==='POST'&&url.pathname==='/api/jobs/verify'){
+          const {id}=z.object({id:z.string().uuid()}).strict().parse(await body(req)),job=store.job(id);if(!job||job.state!=='completed')throw new ApiError(400,'Choose a completed chapter.');if(verifying>=2)throw new ApiError(429,'Verification is busy.');verifying++;
+          try{const verification=await verifyOutput(job,abort.signal);store.update(id,{verification});return send(res,200,verification);}finally{verifying--;}
+        }
+        if(method==='POST'&&url.pathname==='/api/jobs/redownload'){const {id,mode}=z.object({id:z.string().uuid(),mode:z.enum(['missing','copy'])}).strict().parse(await body(req));if(verifying>=2)throw new ApiError(429,'Verification is busy.');verifying++;try{await redownload(store,id,mode);queue.tick();return send(res,200,{ok:true});}catch(e){throw new ApiError(400,(e as Error).message);}finally{verifying--;}}
+        if(method==='GET'&&url.pathname==='/api/follows')return send(res,200,store.follows().map(f=>({...f,series:publicSeries(f.series)})));
+        if(method==='POST'&&url.pathname==='/api/follows'){
+          const data=z.object({source:z.string().max(30),seriesId:opaqueId,language:z.string().min(2).max(10),group:opaqueId.optional(),autoDownload:z.boolean().default(false),enabled:z.boolean().default(false),intervalHours:z.number().int().min(1).max(168).default(6)}).strict().parse(await body(req));
+          const series=await registry.get(data.source).series(data.seriesId,abort.signal);covers.remember(series);const result=follows.save(series,data);return send(res,200,{...result,series:publicSeries(series)});
+        }
+        const followMatch=/^\/api\/follows\/([a-f0-9-]+)\/(check|preview|remove)$/.exec(url.pathname);
+        if(method==='POST'&&followMatch){z.object({}).strict().parse(await body(req));const [_,id,action]=followMatch;if(action==='remove'){follows.remove(id);return send(res,200,{ok:true});}const result=await follows.check(id);return send(res,200,action==='preview'?previewFor(session.id,result.follow.series,result.chapters):{...result.summary,follow:{...result.follow,series:publicSeries(result.follow.series)}});}
         if (method === 'POST' && url.pathname === '/api/cover') {
           const data=z.object({source:z.string().max(30),id:opaqueId}).strict().parse(await body(req));const adapter=registry.get(data.source);
           if(!adapter.cover)throw new ApiError(400,'Cover art is unavailable for this source.');
           const series=await adapter.series(data.id,abort.signal),bytes=await adapter.cover(data.id,abort.signal);
-          await saveCover(s.downloadRoot,series.title,bytes,abort.signal);return send(res,200,{saved:true});
+          await saveCover(s.downloadRoot,series.title,bytes,abort.signal,series,store);return send(res,200,{saved:true});
         }
         if (method === 'POST' && url.pathname === '/api/jobs/delete') {
           const data=z.object({id:z.string().uuid().optional(),all:z.literal(true).optional()}).strict().refine(d=>Boolean(d.id)!==Boolean(d.all)).parse(await body(req));
-          return send(res,200,{deleted:await queue.remove(data.id?[data.id]:store.jobs().filter(j=>j.state!=='completed').map(j=>j.id))});
+          return send(res,200,{deleted:await queue.remove(data.id?[data.id]:store.states('queued','running','paused','failed','action_required','cancelled').map(j=>j.id))});
         }
         if (method === 'POST' && url.pathname === '/api/queue') { const { action } = z.object({ action: z.enum(['pause','resume']) }).strict().parse(await body(req)); action === 'pause' ? queue.pauseAll() : queue.resumeAll(); return send(res,200,{ ok: true }); }
         const jobMatch = /^\/api\/jobs\/([a-f0-9-]+)$/.exec(url.pathname);
@@ -71,10 +101,10 @@ export function createDashboard(store: Store, queue: Queue, registry: Registry, 
           reads = reads.filter(t => Date.now()-t < 60000); if (reads.length >= 90) throw new ApiError(429,'Too many source requests. Wait a minute.'); reads.push(Date.now());
           const adapter = registry.get(url.searchParams.get('source') ?? 'mangadex');
           const offset = z.coerce.number().int().min(0).max(9999).parse(url.searchParams.get('offset') ?? 0);
-          if (url.pathname === '/api/search') return send(res,200,await adapter.search(z.string().min(1).max(200).parse(url.searchParams.get('q')),offset,abort.signal));
+          if (url.pathname === '/api/search'){const page=await adapter.search(z.string().min(1).max(200).parse(url.searchParams.get('q')),offset,abort.signal);page.items.forEach(s=>covers.remember(s));return send(res,200,{...page,items:page.items.map(publicSeries)});}
           const id = opaqueId.parse(url.searchParams.get('id'));
-          if (url.pathname === '/api/series') return send(res,200,await adapter.series(id,abort.signal));
-          return send(res,200,await adapter.chapters(id,{ language: url.searchParams.get('language') ?? 'en', group: url.searchParams.get('group') || undefined },offset,abort.signal));
+          if (url.pathname === '/api/series'){const series=await adapter.series(id,abort.signal);covers.remember(series);return send(res,200,publicSeries(series));}
+          const page=await adapter.chapters(id,{language:url.searchParams.get('language')??'en',group:url.searchParams.get('group')||undefined},offset,abort.signal);const local=store.chapterJobs(adapter.manifest.id,page.items.map(c=>c.id));return send(res,200,{...page,items:page.items.map(c=>({...c,localState:local[c.id]?.verification&&['missing','damaged'].includes(local[c.id].verification!.state)?local[c.id].verification!.state:local[c.id]?.state??'not_downloaded'}))});
         }
         if (method === 'POST' && url.pathname === '/api/preview') {
           const data = z.object({ source: z.string().max(30), seriesId: opaqueId, language: z.string().min(2).max(10), group: opaqueId.optional(), ids: z.array(opaqueId).min(1).max(10000).optional() }).strict().parse(await body(req));
@@ -82,25 +112,15 @@ export function createDashboard(store: Store, queue: Queue, registry: Registry, 
           for (const [id,p] of previews) if (p.expires < Date.now() || p.session===session.id) previews.delete(id);
           if (busyPreviews >= 1 || previews.size >= 10) throw new ApiError(429,'A chapter preview is already in progress, or too many are pending.'); busyPreviews++;
           try {
-            const adapter = registry.get(data.source), series = await adapter.series(data.seriesId,abort.signal); const chapters: Chapter[] = []; let offset = 0;
-            do { const page = await adapter.chapters(data.seriesId,data,offset,abort.signal); chapters.push(...page.items); offset += page.limit; if (data.ids && data.ids.every(id=>chapters.some(c=>c.id===id)) || offset >= page.total) break; if (offset + page.limit > 10000) throw new ApiError(400,'Too many matching chapters. Narrow the language/group filter.'); } while (true);
-            const unique = [...new Map(chapters.map(c => [c.id,c])).values()].filter(c => !c.external && c.pages !== 0 && c.source===data.source && c.seriesId===data.seriesId && (!data.ids || data.ids.includes(c.id)));
-            if (data.ids && data.ids.some(id => !unique.some(c => c.id === id))) throw new ApiError(400,'Some selected chapters no longer match or are unavailable. Refresh the list.');
-            const logical = new Set<string>(); let multipleTranslations = 0;
-            for (const c of unique) { const key = `${c.volume}|${c.number}|${c.language}`; if (logical.has(key)) multipleTranslations++; logical.add(key); }
-            const token = randomBytes(24).toString('hex'); previews.set(token,{ session: session.id, expires: Date.now()+5*60*1000, series,chapters: unique,multipleTranslations });
-            return send(res,200,{ token,count: unique.length,multipleTranslations,expiresInSeconds: 300 });
+            const adapter=registry.get(data.source),series=await adapter.series(data.seriesId,abort.signal),chapters=await matching(adapter,data.seriesId,data,data.ids,abort.signal);
+            return send(res,200,previewFor(session.id,series,chapters));
           } finally { busyPreviews--; }
         }
         if (method === 'POST' && url.pathname === '/api/enqueue') {
           const data = z.object({ token: z.string(), confirmTranslations: z.boolean() }).strict().parse(await body(req)); const p = previews.get(data.token);
           if (!p || p.session !== session.id || p.expires < Date.now()) throw new ApiError(400,'Preview expired. Preview the matching chapters again.');
           if (p.multipleTranslations && !data.confirmTranslations) throw new ApiError(400,'Explicitly confirm multiple translations or select one translation group.');
-          let added = 0, duplicates = 0;
-          // One SQLite transaction prevents a partial bulk enqueue.
-          store.db.exec('BEGIN IMMEDIATE');
-          try { for (const c of p.chapters) store.enqueue(p.series,c,s).duplicate ? duplicates++ : added++; store.db.exec('COMMIT'); } catch (e) { store.db.exec('ROLLBACK'); throw e; }
-          previews.delete(data.token); queue.tick(); return send(res,200,{ added,duplicates });
+          const result=enqueueSelection(store,p.series,p.chapters,s,data.confirmTranslations);previews.delete(data.token);queue.tick();return send(res,200,result);
         }
         throw new ApiError(404,'Unknown API route.');
       }
@@ -116,5 +136,5 @@ export function createDashboard(store: Store, queue: Queue, registry: Registry, 
     }
   });
   server.requestTimeout = 120000; server.headersTimeout = 10000;
-  return { server,auth, listen: (port = settings().port) => new Promise<number>((resolve,reject) => { server.once('error',reject); server.listen(port,'127.0.0.1',() => { server.removeListener('error',reject); const a = server.address(); resolve(typeof a === 'object' && a ? a.port : port); }); }), close: () => new Promise<void>((resolve,reject) => { auth.clear(); if(!server.listening)return resolve(); server.close(e => e ? reject(e) : resolve()); server.closeIdleConnections(); }) };
+  return { server,auth,follows, listen: (port = settings().port) => new Promise<number>((resolve,reject) => { server.once('error',reject); server.listen(port,'127.0.0.1',() => { server.removeListener('error',reject); const a = server.address(); resolve(typeof a === 'object' && a ? a.port : port); }); }), close: () => new Promise<void>((resolve,reject) => { auth.clear();void follows.stop(); if(!server.listening)return resolve(); server.close(e => e ? reject(e) : resolve()); server.closeIdleConnections(); }) };
 }

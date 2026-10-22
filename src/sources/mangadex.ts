@@ -8,7 +8,7 @@ type Entity = z.infer<typeof entity>;
 const collection = z.object({ data: z.array(entity), total: z.number().int().nonnegative(), offset: z.number().int().nonnegative(), limit: z.number().int().positive() });
 export const mangadexManifest: SourceManifest = { id: 'mangadex', name: 'MangaDex', website: 'https://mangadex.org/', status: 'operational', interfaceVersion: 1, capabilities: ['search','series','chapters','public-download','local-session'], apiHosts: ['api.mangadex.org'], imageHosts: ['uploads.mangadex.org','*.mangadex.network'], recommended: { chapters: 1, pageRequests: 1, requestIntervalMs: 300 } };
 function localized(value: unknown): string { const v = z.record(z.string(), z.string()).safeParse(value); return v.success ? v.data.en ?? Object.values(v.data)[0] ?? '' : ''; }
-export function parseSeries(e: Entity): Series { return { id: e.id, source: 'mangadex', title: localized(e.attributes.title) || 'Untitled', description: localized(e.attributes.description) }; }
+export function parseSeries(e: Entity): Series { return { id: e.id, source: 'mangadex', title: localized(e.attributes.title) || 'Untitled', description: localized(e.attributes.description), coverRef:z.string().optional().parse(e.relationships.find(r=>r.type==='cover_art')?.attributes?.fileName) }; }
 export function parseChapter(e: Entity): Chapter {
   const a = e.attributes;
   return { id: e.id, source: 'mangadex', seriesId: e.relationships.find(r => r.type === 'manga')?.id ?? '', title: String(a.title ?? ''), number: String(a.chapter ?? 'Oneshot'), volume: String(a.volume ?? ''), language: String(a.translatedLanguage ?? ''), groups: e.relationships.filter(r => r.type === 'scanlation_group').map(r => ({ id: r.id, name: r.attributes?.name ?? r.id })), pages: typeof a.pages === 'number' ? a.pages : 0, external: Boolean(a.externalUrl) };
@@ -17,14 +17,14 @@ export type JsonClient = Pick<SafeHttp, 'json'>;
 export class MangaDex implements SourceAdapter {
   manifest = mangadexManifest;
   account={kind:'browser' as const,loginUrl:'https://mangadex.org/',hosts:['auth.mangadex.org']};
-  async cover(id:string,signal?:AbortSignal){uuid.parse(id);const r=z.object({data:entity}).parse(await this.api(`/manga/${id}`,new URLSearchParams({'includes[]':'cover_art'}),signal));const cover=r.data.relationships.find(r=>r.type==='cover_art');const file=z.string().regex(/^[a-zA-Z0-9_.-]+$/).safeParse(cover?.attributes?.fileName);if(!file.success)throw new SourceError('This series has no available cover art.');return this.images.get(`https://uploads.mangadex.org/covers/${id}/${file.data}`,this.manifest.imageHosts,signal,true); }
+  async cover(id:string,signal?:AbortSignal,reference?:string){uuid.parse(id);if(reference&&/^[a-zA-Z0-9_.-]+$/.test(reference))return this.images.get(`https://uploads.mangadex.org/covers/${id}/${reference}`,this.manifest.imageHosts,signal,true);const r=z.object({data:entity}).parse(await this.api(`/manga/${id}`,new URLSearchParams({'includes[]':'cover_art'}),signal));const cover=r.data.relationships.find(r=>r.type==='cover_art');const file=z.string().regex(/^[a-zA-Z0-9_.-]+$/).safeParse(cover?.attributes?.fileName);if(!file.success)throw new SourceError('This series has no available cover art.');return this.images.get(`https://uploads.mangadex.org/covers/${id}/${file.data}`,this.manifest.imageHosts,signal,true); }
   constructor(private http: JsonClient,private images:Pick<SafeHttp,'get'>=sharedHttp) {}
   private async api(route: string, params: URLSearchParams, signal?: AbortSignal): Promise<unknown> { return this.http.json(`https://api.mangadex.org${route}?${params}`, this.manifest.apiHosts, signal); }
   async search(query: string, offset = 0, signal?: AbortSignal): Promise<PageResult<Series>> {
-    const p = this.pagination(offset, 20); p.set('title', query.slice(0,200)); p.set('order[relevance]', 'desc');
+    const p = this.pagination(offset, 20); p.set('includes[]','cover_art');p.set('title', query.slice(0,200)); p.set('order[relevance]', 'desc');
     const result = collection.parse(await this.api('/manga', p, signal)); return { ...result, items: result.data.map(parseSeries) };
   }
-  async series(id: string, signal?: AbortSignal): Promise<Series> { uuid.parse(id); const r = z.object({ data: entity }).parse(await this.api(`/manga/${id}`, new URLSearchParams(), signal)); return parseSeries(r.data); }
+  async series(id: string, signal?: AbortSignal): Promise<Series> { uuid.parse(id); const r = z.object({ data: entity }).parse(await this.api(`/manga/${id}`, new URLSearchParams({'includes[]':'cover_art'}), signal)); return parseSeries(r.data); }
   async chapter(id: string, signal?: AbortSignal): Promise<Chapter> { uuid.parse(id); const r = z.object({ data: entity }).parse(await this.api(`/chapter/${id}`, new URLSearchParams({ 'includes[]': 'scanlation_group' }), signal)); return parseChapter(r.data); }
   async chapters(id: string, filter: ChapterFilter, offset = 0, signal?: AbortSignal): Promise<PageResult<Chapter>> {
     uuid.parse(id); const p = this.pagination(offset, 100); p.set('manga',id);

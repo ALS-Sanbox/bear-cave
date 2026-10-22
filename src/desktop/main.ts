@@ -14,6 +14,7 @@ import { Queue } from '../engine/queue.js';
 import { createDashboard } from '../server/server.js';
 import { hashPassword } from '../server/auth.js';
 import { BrowserSessions } from './sessions.js';
+import { StagingMaintenance } from '../engine/maintenance.js';
 import type { Settings } from '../shared/types.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -50,11 +51,14 @@ else {
     // A missing/unwritable folder is fixable through local settings; don't lose the tray or queue.
     try { settings.downloadRoot = await validateRoot(settings.downloadRoot,forbidden); } catch { store.set('queue-paused',true); dialog.showErrorBox('Download folder unavailable','Downloads are paused. Choose a writable local folder in Settings. Existing jobs retain their original destinations.'); }
     const registry = new Registry([new MangaDex(sharedHttp),...websiteAdapters((id,url)=>sessions.cookies(id,url))]); queue = new Queue(store,registry,()=>settings);
+    const maintenance=new StagingMaintenance(store,queue);
     const mangaAccount=new MangaDexAccount(new SecretVault(path.join(data,'secrets')));
     dashboard = createDashboard(store,queue,registry,()=>settings,path.dirname(uiFile));
     try { const port = await dashboard.listen(); localUrl=`http://127.0.0.1:${port}`; }
     catch(e) { const code=(e as NodeJS.ErrnoException).code; if(!['EADDRINUSE','EACCES'].includes(code??''))throw e; store.set('queue-paused',true); await log(`Dashboard listener unavailable: ${code}`); dialog.showErrorBox('Dashboard port unavailable',`Cannot listen on dashboard port ${settings.port}. Downloads are paused. Choose an unused port in local Settings, save, then Quit and reopen Bear Cave.`); }
     ipcMain.handle('local:read',async event=> { trusted(event); return { settings,sources:registry.manifests(),mangaAccount:await mangaAccount.status(),adminConfigured: Boolean(store!.get('admin-hash')) }; });
+    ipcMain.handle('local:staging-scan',async event=>{trusted(event);return maintenance.scan();});
+    ipcMain.handle('local:staging-clean',async(event,token:unknown)=>{trusted(event);const id=z.string().regex(/^[a-f0-9]{48}$/).parse(token);const confirm=await dialog.showMessageBox(settingsWindow!,{type:'warning',buttons:['Keep recoverable files','Delete eligible staging'],defaultId:0,cancelId:0,message:'Delete eligible abandoned staging files?',detail:'Queued, active, paused and followed-series recovery files and completed downloads are excluded. This cannot be undone.'});if(confirm.response!==1)return{removed:0};return maintenance.clean(id);});
     ipcMain.handle('local:manga-connect',async(event,input:unknown)=>{trusted(event);try{return{ok:true,status:await mangaAccount.connect(input)};}catch(e){return{ok:false,error:e instanceof Error?e.message:'MangaDex login failed.'};}});
     ipcMain.handle('local:manga-disconnect',async event=>{trusted(event);try{return{ok:true,status:await mangaAccount.disconnect()};}catch{return{ok:false,error:'Account is busy or secure storage is unavailable. Try again.'};}});
     ipcMain.handle('local:source-session',async(event,id:unknown)=>{trusted(event);await sessions.open(registry.get(z.string().regex(/^[a-z][a-z0-9-]{0,29}$/).parse(id)));return{ok:true};});
@@ -82,7 +86,7 @@ else {
       { type:'separator' },{ label:'Quit',click:()=> { void shutdown(); } }
     ]));
     tray.on('double-click',()=> { if(localUrl)void shell.openExternal(localUrl);else void showSettings(); });
-    queue.start(); await log('Started');
+    queue.start();dashboard.follows.start(); await log('Started');
     if (!store.get('admin-hash') || !localUrl) await showSettings();
   }).catch(async()=> { await log('Startup failed'); dialog.showErrorBox('Bear Cave could not start','Check whether another app uses the dashboard port, the application data folder is writable, and this build supports your Windows version. Details: startup failed; no secrets were logged.'); app.exit(1); });
 }
