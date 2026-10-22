@@ -34,8 +34,12 @@ A dashboard-managed tunnel can use the same hostname/origin. Preserve public Hos
 
 Test from another device: login, HttpOnly/Secure/SameSite=Strict cookie, no mixed content, search/preview/pause/resume, and HTTP-to-HTTPS redirection. Optional Cloudflare Access adds an outer policy but does not replace this application's login.
 
-Proxy trust requires loopback peer, exact configured public Host, local trust setting and forwarded HTTPS. X-Forwarded-Host/For and CF-Connecting-IP do not establish identity. Login limits apply globally: five attempts/fifteen minutes. Sessions last twelve hours and end on restart/password change. Local processes and the tunnel daemon are trusted; no claim is made to distinguish malicious same-user software pretending to be the tunnel.
+Proxy trust requires loopback peer, exact configured public Host, local trust setting and forwarded HTTPS. X-Forwarded-Host/For and CF-Connecting-IP do not establish identity. Login limits apply globally: five failed attempts/fifteen minutes, with at most two concurrent password hashes. Sessions last twelve hours and end on restart/password change. Local processes and the tunnel daemon are trusted; no claim is made to distinguish malicious same-user software pretending to be the tunnel.
 
 Local loopback HTTP uses non-Secure cookies; public HTTPS always uses Secure. All data/downloads remain on Windows. The remote UI has no settings, credentials, folder picker, arbitrary browsing or browser-control route.
 
 Troubleshooting: host rejection means check exact hostname, trust setting and forwarded protocol. Connection failures mean check app/port; no LAN listener exists. For CSRF errors reload/sign in at the exact hostname. Startup failures can indicate port conflicts or app-data permissions. Quit development builds before running packaged Bear Cave.
+
+## Library APIs in 0.3.0
+
+Queue/history are server-paginated and filtered; summary counts and source holds accompany bounded pages. Covers use authenticated source/series URLs on the same origin, never external image URLs carrying credentials. Follow schedules run on the Windows process, not Cloudflare. Hiding a browser tab pauses polling; returning refreshes the session/work state. Verification and redownload accept stored job IDs only, not filesystem paths. Source browser sessions and confirmed staging cleanup remain local IPC only. No tunnel/DNS/account configuration is changed by this release.

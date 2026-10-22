@@ -51,6 +51,7 @@ app.whenReady().then(async()=>{
   const login=await remote.webContents.executeJavaScript(`fetch('/api/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({password:'temporary integration password'})}).then(r=>r.status)`);
   assert.equal(login,200);
   await remote.reload();await new Promise(r=>setTimeout(r,500));
+  await remote.webContents.executeJavaScript("Object.defineProperty(document,'hidden',{get:()=>false,configurable:true});document.dispatchEvent(new Event('visibilitychange'));");
   assert((await remote.webContents.executeJavaScript('document.body.innerText')).includes('Find your next chapter.'));
   await remote.webContents.executeJavaScript(`Array.from(document.querySelectorAll('nav button')).find(b=>b.textContent.includes('Sources')).click()`);
   await new Promise(r=>setTimeout(r,100));
@@ -58,13 +59,13 @@ app.whenReady().then(async()=>{
   assert.equal(await remote.webContents.executeJavaScript('document.querySelectorAll(".source-grid article").length'),6);
   assert(await remote.webContents.executeJavaScript('Array.from(document.images).every(i=>i.complete && i.naturalWidth>0)'));
   server.auth.clear();
-  await new Promise(r=>setTimeout(r,2400));
+  await new Promise(r=>setTimeout(r,3000));
   assert((await remote.webContents.executeJavaScript('document.body.innerText')).includes('Your dashboard session ended'));
   assert(await remote.webContents.executeJavaScript('!!document.querySelector(".login form")'));
   let unauthorizedPolls=0;
-  const listener=(_details,callback)=>{if(_details.url.endsWith('/api/jobs'))unauthorizedPolls++;callback({});};
+  const listener=(_details,callback)=>{if(_details.url.endsWith('/api/jobs')||_details.url.endsWith('/api/summary'))unauthorizedPolls++;callback({});};
   remote.webContents.session.webRequest.onBeforeRequest(listener);
-  await new Promise(r=>setTimeout(r,2400));
+  await new Promise(r=>setTimeout(r,3000));
   remote.webContents.session.webRequest.onBeforeRequest(null);
   assert.equal(unauthorizedPolls,0,'Polling stops while signed out');
   console.log('Electron smoke passed: native SQLite, DPAPI roundtrip, sandboxed preload, local settings rendering, remote login, dashboard and sources.');

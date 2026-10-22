@@ -1,75 +1,56 @@
 # Bear Cave
 
-A standalone Windows tray manga downloader with an authenticated Vue web dashboard. Windows owns the server, queue, SQLite database, sessions and downloads. No Lions Library, Docker or Linux server is needed.
+A standalone Windows tray manga downloader with an authenticated Vue dashboard. Electron, TypeScript and SQLite own the server, queue, history and files. No Lions Library, Docker, Linux server or external scheduler is required.
 
-Version 0.2.4 enables MangaDex, Asura Scans, Flame Comics, ThunderScans, WEBTOON and ToonGod. ToonGod currently requires local human verification and its live reader remains unverified. The other newly added sources passed public search/chapter/image smoke tests. See [current source status](docs/source-status.md).
+Version **0.3.0** adds streaming recovery, verified history and safe redownload, grouped queues, indexed/paginated library queries, source-level challenge recovery, actual cover images, followed series and local staging maintenance. See [release notes](docs/release-0.3.0.md) and [source status](docs/source-status.md). Enabled does not mean live access is healthy; ToonGod's protected live reader remains unverified.
 
 ## Windows development
 
-Use Windows 10/11 x64, Node.js 24 LTS (24.15+ in the 24.x line), and npm. The lockfile is included. `.cmd` avoids PowerShell's npm.ps1 execution-policy restriction.
+Use Windows 10/11 x64 and Node.js 24 LTS (24.15+ within 24.x). The lockfile is included; .cmd avoids PowerShell's npm.ps1 restriction.
 
-```powershell
-cd C:\Users\Ford\Desktop\Projects\bear-cave
+~~~powershell
 npm.cmd ci
 npm.cmd run dev
-```
+~~~
 
-First launch opens Local settings. Choose a download folder and set an administrator password (12+ characters). Save, then choose Open Dashboard from the tray and log in at `http://127.0.0.1:43110`. `npm.cmd start` launches an existing build. `dev` builds both TypeScript and Vue first; no separate Vite server is required.
+First launch opens local Settings. Choose a writable root and set an administrator password of at least 12 characters. Save, then Open Dashboard from the tray at http://127.0.0.1:43110. npm.cmd start runs an existing build. Closing Settings/browser leaves the engine running; tray Quit stops it safely. Start with Windows remains an optional local login item.
 
-Closing Settings hides its window. Closing the browser leaves the engine running. Tray actions: Open Dashboard, Settings, Pause All Downloads, Resume Downloads, Quit. Quit aborts work safely and closes HTTP/SQLite. Start with Windows is optional, runs at user login, and is not a Windows service.
+## Using the library
 
-## Check and build
+- Discover a series and select a translation where supported. Previews show matching, completed, existing and **new** counts. Confirmation adds only new identities.
+- Queue chapters appear in collapsible series groups with aggregate progress and individual/group controls. Removing entries keeps files. History is paginated, searchable and filtered by source/status.
+- **Verify downloaded file** distinguishes missing, damaged and inaccessible output. **Download again** requeues known missing output or explicitly creates a separate copy. Good existing files are kept; history tracks the latest attempt for each source/chapter identity.
+- Covers load through an authenticated controlled endpoint with the mark as fallback. **Download cover art** saves a real coverart.png beside chapters.
+- **Follow series** retains source, language/group and download preferences. Followed Series provides Check now, Download missing chapters and optional schedules. Checks run **only while Bear Cave is running**, at 1–168-hour intervals. Global pause suspends automatic work; repeated failures back off and pause for review. Automatic downloading is opt-in, and extra translations still need consent.
+- Complete source interaction in its local browser, then use **Retry affected downloads** to release eligible source holds, including stale holds whose original jobs were deleted. Website login and personal-client API login remain separate.
+- Local Settings → Staging maintenance scans recognizable abandoned recovery data. A fresh scan and native confirmation precede cleanup. Active, queued, paused, followed recovery and completed output are excluded. Unknown/untracked folders are not swept.
 
-```powershell
+New files use Download root/Series Name/Series Name 001.cbz, or the equivalent chapter image folder. Decimal chapters retain decimals; large numbers are not truncated. Persistent folder mappings handle title changes, Windows case/sanitization collisions and cross-source collisions. Existing completed files stay in their original locations. Covers share the same mapping; .bear-cave metadata supports recovery and claims.
+
+## Verification and packaging
+
+~~~powershell
 npm.cmd run typecheck
 npm.cmd test
 npm.cmd run build
 npm.cmd run test:electron
 npm.cmd run dist:win
-```
+~~~
 
-Installer: `release\Bear Cave Setup 0.2.4.exe`. NSIS supports per-user installation and a selectable folder. The build downloads tooling but does not publish or install. It is unsigned and uses the supplied Bear Cave mark as its application icon. Signing needs your certificate; automatic updates are deferred. The supplied text logo appears on the dashboard and login screen; both originals remain in images/.
+The unsigned per-user x64 installer is release/Bear Cave Setup 0.3.0.exe. Packaging does not publish or install. Signing requires your certificate; automatic updates are not implemented. Supplied logos/icons are preserved. [Windows manual checklist](docs/manual-test-checklist.md) covers install/reader checks, real account sign-in and tunnels.
 
-Explicit live check (not part of automated fixture tests):
+Offline fixtures cover migration compatibility, token/revision changes, streaming/cancelled archives, large history, follow scheduling, translation safeguards, authentication and filesystem security. Electron tests use isolated temporary application data. See [release verification](docs/verification-0.3.0.md) for exact counts and checks not run; historical Phase 1 counts are not current results.
 
-```powershell
-npm.cmd run smoke:mangadex
-npm.cmd run smoke:mangadex -- "Azumanga"
+Live checks remain explicit, minimal and separate:
+
+~~~powershell
 npm.cmd run smoke:sources -- asura flame thunder webtoon
-```
+~~~
 
-This checks up to five search results and one real image in memory. It does not download a whole chapter.
+## Data and practical limits
 
-Downloads use `Download root/Series Name/Series Name 001.cbz` (or a chapter image folder with the same name). Chapters have at least three digits, preserve decimals, and use a suffix only when another download claims the same name. The `.bear-cave` metadata directory supports recovery and prevents overwrites. Existing completed downloads are kept in their original location.
+SQLite/settings/logs/source profiles live in Electron userData (normally %APPDATA%/Bear Cave). Downloads default to Bear Cave Downloads under Documents. A local SQLite backup precedes legacy schema migration. Original records/paths and Windows-protected secrets are retained.
 
-Retry restarts the selected chapter and resumes the engine if globally paused. Clear failed chapters removes failed queue entries, keeps saved files and permits those chapters to be added again. MangaDex sign-in shows success or failure beside the account form in tray Settings.
+Images are capped at 32 MiB and chapters at 2,000 pages. Streaming CBZ uses a below-4-GiB ZIP32 limit; image folders avoid that aggregate cap. Recovery verifies complete pages, without byte-range resume. Unknown URL identity schemes stay conservative; an unchanged source path without version/hash information cannot reveal an upstream overwrite. Website sources are English-only. Access restrictions, ToonGod live validation, manual real-account verification and unsigned installation remain practical limits.
 
-Open a series and choose **Download cover art** to save a real PNG as `Series Name/coverart.png`. This is a separate action from downloading chapters. Cover availability depends on the source.
-
-The queue has **Delete** for individual entries and **Delete entire queue** for all non-completed entries. Deletion aborts active workers before removing queue records, keeps completed history and saved files, and lets you re-add removed chapters.
-
-MangaDex now has **Open MangaDex** in local Settings and an **Open MangaDex session (local)** tray action. Its isolated browser permits the MangaDex authentication domain and remembers website sign-in. Website sign-in remains separate from personal-client API tokens; public downloads do not require either.
-
-## Try one chapter before bulk downloading
-
-1. Search and open a series. Select language and apply filters. Groups appear as you load chapter pages.
-2. Click Download on one chapter, review its count in the confirmation dialog and confirm. The dashboard opens Download queue automatically; source errors appear in the dialog.
-3. Watch Download queue, then History. Open the actual CBZ/folder in Explorer and your reader.
-4. Only then use selected chapters or Preview all matching. Additional translations require explicit confirmation. Existing source/chapter IDs are skipped, including failed/cancelled jobs: use Retry for those.
-
-## Data and remote access
-
-SQLite (`bear-cave.sqlite` plus WAL/SHM), generic `bear-cave.log`, Chromium data and isolated source profiles live in Electron `userData`: normally `%APPDATA%\Bear Cave`. Downloads default to `Bear Cave Downloads` inside Windows Documents. Local Settings shows the configured folder. Data remains outside the repository/resources; UNC download shares are rejected.
-
-Dashboard passwords use salted scrypt hashes. Optional MangaDex login uses an approved personal-client ID/secret and its owner's credentials, entered only in local Settings. Its password is never saved; tokens/client secret use Windows-backed Electron safeStorage. See [account setup](docs/accounts.md). Logs omit passwords, bodies and temporary page URLs. No remote settings export or filesystem browser exists. Replace a forgotten dashboard password using local Settings. Quit before backing up SQLite. Jobs retain their original root/format; changed settings affect new jobs.
-
-The HTTP server binds only to `127.0.0.1`. For remote access, set the exact HTTPS public URL and enable tunnel trust locally, then configure Cloudflare Tunnel separately. No external services are configured automatically.
-
-- [Architecture](docs/architecture.md)
-- [Source development](docs/source-development.md)
-- [Remote access](docs/remote-access.md)
-- [Manual checklist](docs/manual-test-checklist.md)
-- [Phase status and limits](docs/phase-status.md)
-- [Current source status](docs/source-status.md)
-- [MangaDex login and local source sessions](docs/accounts.md)
-- [Official docs and licenses](docs/references.md)
+[Architecture](docs/architecture.md) · [Source development](docs/source-development.md) · [Remote access](docs/remote-access.md) · [Accounts](docs/accounts.md) · [Historical phase records](docs/phase-status.md)

@@ -11,3 +11,8 @@ coverage/
 build/branding/
 src/ui/assets/logo-*.png
 src/ui/public/favicon.ico
+
+# Local library databases and migration backups
+*.sqlite
+*.sqlite-*
+*.sqlite.pre-*.bak

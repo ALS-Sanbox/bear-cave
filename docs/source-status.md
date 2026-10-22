@@ -1,4 +1,4 @@
-# Version 0.2.0 source status
+# Version 0.3.0 source status
 
 All six adapters are enabled in the source selector and per-source concurrency settings. Enabled means connector code exists; it does not guarantee current website availability or authorized access to every chapter.
 
@@ -17,9 +17,11 @@ The supplied text logo is used for dashboard/login branding. The supplied mark g
 
 ## Checks and remaining manual work
 
-Type checking, 47 offline fixture/security/queue tests, production compilation and hidden Electron checks are run locally. The Electron checks cover encrypted vault storage/removal, source-cookie isolation, branding asset loading, the local-only account bridge and desktop lifecycle. The live website checks fetch one image into memory; they do not download full chapters. Use the manual checklist to install the app, enter your own MangaDex credentials locally, test source-session interaction, read one full chapter per source, and test your Cloudflare Tunnel. No external accounts, releases, tunnels or Windows login items were configured during implementation.
+Current verification is recorded in [the 0.3.0 release record](verification-0.3.0.md). Historical live checks in the table above are dated October 20, 2026; this coordinated release uses deterministic fixtures and does not claim new live-reader or real-account validation. Native checks use isolated temporary app data.
 
-Known limits: ToonGod's live reader is not yet validated; third-party markup may change; English-only website adapters; paid/app-only/unavailable content is not unlocked; source account-library synchronization is absent; no byte-range page resume; CBZ memory cap remains 512 MiB; installer is unsigned; no automatic updater. See accounts.md for exact login behavior and phase-status.md for historical Phase 1 checks.
+All adapters share streaming output/recovery, paginated library status, guarded previews and source holds. Search/detail covers use a controlled authenticated cache with mark fallback; full cover downloads remain explicit. MangaDex supplies content hashes/filenames. Asura/Flame immutable image paths can distinguish transport signing fields from image identity. Unknown schemes remain conservative and retain meaningful query information in hashed identities.
+
+Known manual limits: ToonGod live-reader validation, changing third-party markup, English-only website adapters, paid/app-only access restrictions, real account sign-in, real reader rendering, tunnel deployment and unsigned installation. Account-library synchronization is not implemented; Followed Series is Bear Cave's own independent scheduler. No byte-range resume or automatic updater is implemented. Streaming CBZ replaces the old 512 MiB memory cap with a below-4-GiB ZIP32 bound.
 
 ```powershell
 # Explicit live checks; ToonGod currently reports action_required and exits nonzero:

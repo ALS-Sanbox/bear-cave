@@ -1,6 +1,6 @@
 # Historical Phase 1 status
 
-The current application is version 0.2.0. See [current source status](source-status.md) and [account setup](accounts.md) for the new connectors, logos and MangaDex account support. The snapshot below records the original Phase 1 implementation and validation, not the current list of disabled/deferred features.
+The current application is version 0.3.0. This entire page is a historical Phase 1 snapshot; its deferred features, disabled connectors and test counts are not current release claims. See [current source status](source-status.md) and [account setup](accounts.md) for the new connectors, logos and MangaDex account support. The snapshot below records the original Phase 1 implementation and validation, not the current list of disabled/deferred features.
 
 Implemented: Electron tray/single-instance lifecycle, local Vue settings and native folder dialog, optional Windows login item, SQLite settings/jobs/history, administrator password hashing, authenticated loopback HTTP/Vue dashboard, explicit HTTPS proxy configuration, CSRF/session/host/origin protections, MangaDex public search/details/filtered chapter pagination/downloads, transactional count previews, explicit multiple-translation confirmation, queue controls/progress/history, active chapter/page limits, bounded retry/cooldown/expiry behavior, safe ordered image-folder/CBZ output, revision/checksum recovery, and disabled planned sources.
 

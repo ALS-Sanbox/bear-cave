@@ -18,3 +18,7 @@ MangaDex currently documents registered personal clients for this flow; public a
 Use the tray's Open [source] session action or the Local source sessions buttons in Settings. Each has an isolated persistent Chromium profile. Complete normal site interaction manually, then retry the search/job. Session cookies are obtained only from that source's local profile and scoped by URL; credentials are not exposed to HTTP API callers or unrelated CDN hosts.
 
 Windows are sandboxed, have Node integration disabled, use context isolation, have no privileged preload, and deny popups/permissions and unrelated destinations. The browser guard checks destination hosts/public DNS; Node source fetches additionally pin validated DNS addresses. Browser sessions cannot promise successful access to protected sources. ToonGod currently returns a verification page, and cookie reuse alone may not satisfy its protection. No CAPTCHA solving, fingerprint spoofing or universal challenge bypass is implemented. Paid/app-only content is not unlocked.
+
+## Source holds in 0.3.0
+
+After completing local interaction, use Retry affected downloads in Sources or Queue. It releases eligible held jobs and can clear stale holds even after their original jobs were removed. Global pause and source request cooldowns still apply. The button does not verify login success or label the connector healthy. Followed Series preferences and schedules are local application data, not synchronization with a source account library.

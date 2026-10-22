@@ -15,7 +15,7 @@ export class YourSource implements SourceAdapter {
   async chapter(id:string,signal?:AbortSignal):Promise<never>{throw new SourceError('Implement metadata');}
   async chapters(id:string,filter:ChapterFilter,offset:number,signal?:AbortSignal):Promise<never>{throw new SourceError('Implement filtered pagination');}
   async resolve(id:string,signal?:AbortSignal):Promise<never>{
-    // Return {revision,urls} in source order. Challenges: SourceError(...,'action_required').
+    // Return {revision,identities?,urls} in source order. Identities are stable page IDs/hashes, never signing URLs. Challenges: SourceError(...,'action_required').
     throw new SourceError('Implement page resolution');
   }
 }

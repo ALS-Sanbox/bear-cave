@@ -1,7 +1,7 @@
 {
   "name": "bear-cave",
   "productName": "Bear Cave",
-  "version": "0.2.4",
+  "version": "0.3.0",
   "private": true,
   "description": "Windows tray manga downloader",
   "author": "Bear Cave contributors",
@@ -19,7 +19,8 @@
     "build": "node scripts/build-assets.mjs && tsc -p tsconfig.build.json && vite build && node scripts/copy-preload.mjs",
     "dist:win": "npm run build && electron-builder --win nsis --x64 --publish never",
     "smoke:mangadex": "tsx scripts/smoke.ts",
-    "smoke:sources": "tsx scripts/smoke-sources.ts"
+    "smoke:sources": "tsx scripts/smoke-sources.ts",
+    "format": "node scripts/format-source.mjs"
   },
   "dependencies": {
     "cheerio": "^1.2.0",
