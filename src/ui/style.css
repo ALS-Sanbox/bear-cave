@@ -955,3 +955,13 @@ footer span {
 .series-group:not([open]) > summary::before {
   content: "+";
 }
+
+.followed-series .section-bar {
+  justify-content: flex-start;
+  gap: 20px;
+}
+
+.followed-series .section-bar > div {
+  flex: 1;
+  min-width: 0;
+}

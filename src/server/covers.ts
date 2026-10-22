@@ -2,6 +2,7 @@ import sharp from 'sharp';
 import type { Registry } from '../sources/registry.js';
 import type { Series } from '../shared/types.js';
 import { setTimeout as delay } from 'node:timers/promises';
+import { imageExtension } from '../engine/files.js';
 export class CoverCache {
     private references = new Map<string, string>();
     private cache = new Map<string, {
@@ -34,7 +35,7 @@ export class CoverCache {
             return this.pending.get(key)!;
         if (this.pending.size >= 32)
             throw Error('Cover requests are busy');
-        const task = (async () => {
+        const task = Promise.resolve().then(async () => {
             let acquired = false;
             try {
                 const signal = AbortSignal.any([AbortSignal.timeout(60000), this.shutdown.signal]);
@@ -48,6 +49,7 @@ export class CoverCache {
                 const data = await adapter.cover(id, signal, this.references.get(key));
                 if (data.byteLength > 32 * 1024 * 1024)
                     throw Error('Cover too large');
+                imageExtension(data);
                 const bytes = await sharp(Buffer.from(data), { limitInputPixels: 40000000 }).rotate().resize({
                     width: 240, height: 360, fit: 'inside', withoutEnlargement: true
                 }).png().toBuffer();
@@ -63,7 +65,7 @@ export class CoverCache {
                     this.active--;
                 this.pending.delete(key);
             }
-        })();
+        });
         this.pending.set(key, task);
         return task;
     }

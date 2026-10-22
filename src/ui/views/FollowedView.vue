@@ -72,7 +72,7 @@ async function save(f: FollowedSeries) {
       </label>
       <label class="check">
         <input v-model="follow.autoDownload" type="checkbox">
-        Automatically download missing chapters (opt in)
+        Automatically download missing chapters during scheduled checks (opt in)
       </label>
       <p class="hint">Extra translations never download automatically. Select a preferred group or use the manual confirmation preview.</p>
       <button :disabled="model.busy">Save preferences</button>

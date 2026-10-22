@@ -37,6 +37,9 @@ export function digest(data: Uint8Array): string {
     return createHash('sha256').update(data).digest('hex');
 }
 export async function saveCover(root: string, title: string, bytes: Uint8Array, signal?: AbortSignal, series?: Series, store?: Store) {
+    if (bytes.byteLength > MAX_PAGE_BYTES)
+        throw Error('Cover exceeds image size limit');
+    imageExtension(bytes);
     const dir = series ? await seriesDirectory(root, series, store) : contained(await realpath(root), safeName(title, 65));
     await noLink(dir);
     await mkdir(dir, { recursive: true });
