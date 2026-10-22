@@ -89,6 +89,12 @@ export class Queue {
     this.tick();
   }
   async clearFailed() { await Promise.all(this.store.states('failed').flatMap(j=>this.active.get(j.id)?.promise??[]));return this.store.clearFailed(); }
+  async remove(ids:string[]) {
+    const jobs=ids.map(id=>this.store.job(id)).filter((j):j is Job=>Boolean(j)&&j!.state!=='completed');
+    for(const j of jobs){this.store.update(j.id,{state:'cancelled'});this.active.get(j.id)?.controller.abort();}
+    await Promise.all(jobs.flatMap(j=>this.active.get(j.id)?.promise??[]));
+    return jobs.reduce((count,j)=>count+this.store.remove(j.id),0);
+  }
   pauseAll() { this.store.set('queue-paused',true); for (const j of this.store.states('running','queued')) this.control(j.id,'pause'); }
   resumeAll() { this.store.set('queue-paused',false); for (const j of this.store.states('paused')) this.store.update(j.id,{ state: 'queued' }); this.tick(); }
   async stop() { this.stopping = true; if (this.timer) clearInterval(this.timer); for (const [id,a] of this.active) { if (this.store.job(id)?.state === 'running') this.store.update(id,{ state: 'queued' }); a.controller.abort(); } await Promise.all([...this.active.values()].map(a => a.promise)); }

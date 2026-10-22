@@ -16,9 +16,9 @@ app.whenReady().then(async()=>{
   const settings=defaults(temp);store=new Store(path.join(temp,'download.sqlite'));store.set('admin-hash',await hashPassword('download test password'));
   const series={id:'fixture-series',source:'mangadex',title:'Download fixture',description:'A long deterministic chapter list.'};
   const chapters=Array.from({length:1000},(_,i)=>({id:`fixture-chapter-${i+1}`,source:'mangadex',seriesId:series.id,title:`Fixture ${i+1}`,number:String(i+1),volume:'',language:'en',groups:[],pages:2,external:false}));
-  const png=Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a4RkAAAAASUVORK5CYII=','base64');
+  const png=await require('sharp')({create:{width:2,height:3,channels:3,background:'#a7470b'}}).png().toBuffer();
   let failPreview=false,allowAll=false,activeListings=0;
-  const source={manifest:{id:'mangadex',name:'Fixture source',website:'https://fixture.example/',status:'operational',interfaceVersion:1,capabilities:['search','series','chapters','public-download'],apiHosts:['fixture.example'],imageHosts:['fixture.example'],recommended:{chapters:1,pageRequests:1,requestIntervalMs:1000}},search:async()=>({items:[series],total:1,offset:0,limit:20}),series:async()=>series,chapters:async(_id,_filter,offset,signal)=>{activeListings++;try{await delay(150,undefined,{signal});if(failPreview)throw new SourceError('Fixture source unavailable. Try again.');if(offset>0&&!allowAll)throw new SourceError('Single selection scanned unrelated chapter pages.');return{items:chapters.slice(offset,offset+100),total:chapters.length,offset,limit:100};}finally{activeListings--;}},chapter:async id=>chapters.find(c=>c.id===id),resolve:async()=>({revision:'fixture',urls:['https://fixture.example/1.png','https://fixture.example/2.png']}),readPage:async()=>png};
+  const source={manifest:{id:'mangadex',name:'Fixture source',website:'https://fixture.example/',status:'operational',interfaceVersion:1,capabilities:['search','series','chapters','public-download'],apiHosts:['fixture.example'],imageHosts:['fixture.example'],recommended:{chapters:1,pageRequests:1,requestIntervalMs:1000}},search:async()=>({items:[series],total:1,offset:0,limit:20}),series:async()=>series,chapters:async(_id,_filter,offset,signal)=>{activeListings++;try{await delay(150,undefined,{signal});if(failPreview)throw new SourceError('Fixture source unavailable. Try again.');if(offset>0&&!allowAll)throw new SourceError('Single selection scanned unrelated chapter pages.');return{items:chapters.slice(offset,offset+100),total:chapters.length,offset,limit:100};}finally{activeListings--;}},chapter:async id=>chapters.find(c=>c.id===id),resolve:async()=>({revision:'fixture',urls:['https://fixture.example/1.png','https://fixture.example/2.png']}),readPage:async()=>png,cover:async()=>png};
   const registry=new Registry([source]);queue=new Queue(store,registry,()=>settings);dashboard=createDashboard(store,queue,registry,()=>settings,path.resolve('dist/ui'));const port=await dashboard.listen(0);
   window=new BrowserWindow({show:false,width:1000,height:800,webPreferences:{sandbox:true,contextIsolation:true,nodeIntegration:false}});
   const js=script=>window.webContents.executeJavaScript(script,true).catch(error=>{throw new Error(`${error.message}\nRenderer script: ${script}`);});
@@ -32,6 +32,9 @@ app.whenReady().then(async()=>{
   await js(`(()=>{const input=document.querySelector('.searchbar input');input.value='fixture';input.dispatchEvent(new Event('input',{bubbles:true}));document.querySelector('.searchbar').requestSubmit();})()`);
   await until(()=>js('!!document.querySelector(".result")'),'search results');await click('.result');
   await until(()=>js('document.querySelectorAll(".chapters tbody tr").length===100'),'long chapter list');
+  await js('Array.from(document.querySelectorAll("button")).find(b=>b.textContent==="Download cover art").click()');
+  await until(()=>fs.existsSync(path.join(settings.downloadRoot,series.title,'coverart.png')),'cover saved beside chapters');
+  await until(()=>js('!document.querySelector(".series-heading button").disabled'),'cover action complete');
   assert.equal(await js('getComputedStyle(document.querySelector("button.primary")).backgroundColor'),'rgb(167, 71, 11)');
   // Click deep in a long table. The old inline confirmation was below the entire list.
   await js('const row=document.querySelectorAll(".chapters tbody tr")[50];row.scrollIntoView({block:"center"});row.querySelector("button").click()');
@@ -65,6 +68,13 @@ app.whenReady().then(async()=>{
   await until(()=>js('Array.from(document.querySelectorAll("button")).some(b=>b.textContent==="Clear failed chapters"&&!b.disabled)'),'clear failed ready');
   await js('Array.from(document.querySelectorAll("button")).find(b=>b.textContent==="Clear failed chapters").click()');
   await until(()=>!store.job(failed.id),'failed entry cleared');assert.equal(store.states('completed').length,2);assert(fs.existsSync(store.job(retryJob.id).output));
+  queue.pauseAll();const firstDelete=store.enqueue(series,chapters[3],settings).job;
+  await until(()=>js('Array.from(document.querySelectorAll(".job button")).some(b=>b.textContent==="Delete"&&!b.disabled)'),'individual delete visible');
+  await js('Array.from(document.querySelectorAll(".job button")).find(b=>b.textContent==="Delete"&&!b.disabled).click()');await until(()=>!store.job(firstDelete.id),'individual job deleted');
+  store.enqueue(series,chapters[4],settings);store.enqueue(series,chapters[5],settings);
+  await until(()=>js('Array.from(document.querySelectorAll("button")).some(b=>b.textContent==="Delete entire queue"&&!b.disabled)'),'clear queue enabled');
+  await js('window.confirm=()=>true;Array.from(document.querySelectorAll("button")).find(b=>b.textContent==="Delete entire queue").click()');
+  await until(()=>store.jobs().length===2,'entire queue cleared, completed history kept');assert(fs.existsSync(path.join(settings.downloadRoot,series.title,'coverart.png')));
   console.log('Download UI smoke passed: dark-orange theme, visible modal/loading/errors, cancellation, selected/all counts, actual click-to-CBZ and queue navigation.');
   window.destroy();await dashboard.close();await queue.stop();store.close();app.exit(0);
 }).catch(async e=>{console.error(e);try{window?.destroy();await dashboard?.close();await queue?.stop();store?.close();}catch{}app.exit(1);});

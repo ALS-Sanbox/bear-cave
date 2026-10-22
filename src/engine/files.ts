@@ -2,6 +2,8 @@ import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { mkdir, lstat, readFile, writeFile, rename, realpath, rm } from 'node:fs/promises';
 import { zipSync, unzipSync } from 'fflate';
+import sharp from 'sharp';
+import { randomUUID } from 'node:crypto';
 import type { Job } from '../shared/types.js';
 
 export function safeName(value: string, max = 55): string {
@@ -17,6 +19,13 @@ export function contained(root: string, ...parts: string[]): string {
 }
 async function noLink(file: string) { try { if ((await lstat(file)).isSymbolicLink()) throw Error('Symbolic links and junctions are not allowed in download paths.'); } catch (e) { if ((e as NodeJS.ErrnoException).code !== 'ENOENT') throw e; } }
 export function digest(data: Uint8Array): string { return createHash('sha256').update(data).digest('hex'); }
+export async function saveCover(root:string,title:string,bytes:Uint8Array,signal?:AbortSignal){
+  const dir=contained(await realpath(root),safeName(title,65));await noLink(dir);await mkdir(dir,{recursive:true});
+  const file=contained(dir,'coverart.png'),temp=contained(dir,`.coverart-${randomUUID()}.part`);await noLink(file);
+  const png=await sharp(Buffer.from(bytes),{limitInputPixels:40_000_000}).rotate().png().toBuffer();signal?.throwIfAborted();
+  try{await writeFile(temp,png,{flag:'wx'});signal?.throwIfAborted();await noLink(file);await rename(temp,file);}finally{await rm(temp,{force:true});}
+  return file;
+}
 export function chapterNumber(value: string): string { return /^\d+(?:\.\d+)?$/.test(value) ? value.replace(/^\d+/,n=>n.replace(/^0+(?=\d)/,'').padStart(3,'0')) : safeName(value,20); }
 function fileId(value:string) { return /^[a-f0-9-]{36}$/i.test(value) ? value.toLowerCase() : digest(Buffer.from(value)).slice(0,32); }
 export function imageExtension(data: Uint8Array): string {

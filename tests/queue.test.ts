@@ -8,6 +8,7 @@ import { SourceError } from '../src/shared/types.js';
 import { workspace,series,chapter,eventually } from './helpers.js';
 
 describe('persistent queue',()=> {
+  it('deletes active and pending jobs only after stopping workers and keeps completed history',async()=>{const w=await workspace(),s=new Store(':memory:');let aborted=false;const q=new Queue(s,new Registry([]),()=>w.settings,undefined,async(_j,signal)=>{try{await delay(30000,undefined,{signal});return 'done';}finally{aborted=signal.aborted;}});try{const active=s.enqueue(series,chapter(),w.settings).job;q.tick();expect(s.job(active.id)?.state).toBe('running');expect(await q.remove([active.id])).toBe(1);expect(aborted).toBe(true);expect(s.job(active.id)).toBeUndefined();const pending=s.enqueue(series,chapter(),w.settings).job;const failed=s.enqueue(series,chapter(),w.settings).job;s.update(failed.id,{state:'failed'});const completed=s.enqueue(series,chapter(),w.settings).job;s.update(completed.id,{state:'completed',output:'kept.cbz'});expect(await q.remove(s.jobs().map(j=>j.id))).toBe(2);expect(s.jobs()).toHaveLength(1);expect(s.job(completed.id)?.output).toBe('kept.cbz');expect(s.enqueue(series,pending.chapter,w.settings).duplicate).toBe(false);}finally{await q.stop();s.close();await w.cleanup();}});
   it('retries a failed download while globally paused and clears only failed entries',async()=>{
     const w=await workspace(),s=new Store(':memory:');let fail=true;
     const q=new Queue(s,new Registry([]),()=>w.settings,undefined,async()=>{if(fail)throw Error('temporary failure');return 'done';});

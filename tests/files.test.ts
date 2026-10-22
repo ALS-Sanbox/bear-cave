@@ -3,10 +3,12 @@ import path from 'node:path';
 import { readFile,writeFile,readdir,mkdir,symlink } from 'node:fs/promises';
 import { unzipSync } from 'fflate';
 import { Store } from '../src/core/store.js';
-import { ChapterOutput,safeName,contained,imageExtension,chapterNumber } from '../src/engine/files.js';
+import { ChapterOutput,safeName,contained,imageExtension,chapterNumber,saveCover } from '../src/engine/files.js';
+import sharp from 'sharp';
 import { validateRoot } from '../src/core/settings.js';
 import { workspace,series,chapter,png } from './helpers.js';
 describe('Windows filenames and outputs',()=> {
+  it('converts JPEG cover art to a real PNG inside the series folder and rejects junctions',async()=>{const w=await workspace(),other=await workspace();try{const jpg=await sharp({create:{width:2,height:3,channels:3,background:'#a7470b'}}).jpeg().toBuffer();const file=await saveCover(w.dir,series.title,jpg);expect(path.relative(w.dir,file)).toBe(path.join(series.title,'coverart.png'));expect((await sharp(await readFile(file)).metadata()).format).toBe('png');await symlink(other.dir,path.join(w.dir,'Linked Series'),'junction');await expect(saveCover(w.dir,'Linked Series',jpg)).rejects.toThrow('junctions');await expect(saveCover(w.dir,'Invalid',Buffer.from('html challenge'))).rejects.toThrow();}finally{await w.cleanup();await other.cleanup();}});
   it('pads chapters without losing decimals or truncating large numbers',()=>{expect(chapterNumber('1')).toBe('001');expect(chapterNumber('12.5')).toBe('012.5');expect(chapterNumber('1000')).toBe('1000');expect(chapterNumber('0001')).toBe('001');});
   it('rejects traversal and handles reserved names, trailing dots and Unicode',()=>{for(const name of ['CON','con.txt','LPT1','COM9.log','NUL'])expect(safeName(name)).toMatch(/^_/);expect(safeName('../a\\b:*? ')).not.toMatch(/[\\/:*?]|[. ]$/);expect(safeName('...')).toBe('Untitled');expect(safeName('abc'.repeat(100)).length).toBeLessThanOrEqual(55);expect(()=>contained(path.resolve('test'),'..','evil')).toThrow('Unsafe');expect(()=>imageExtension(Buffer.from('<html>challenge</html>'))).toThrow();});
   it('validates write access and rejects application/repository destinations',async()=>{const w=await workspace();try{expect(await validateRoot(w.dir,[])).toBeTruthy();await expect(validateRoot(path.join(w.dir,'resources'),[w.dir])).rejects.toThrow('outside');await expect(validateRoot('relative',[])).rejects.toThrow('absolute');}finally{await w.cleanup();}});

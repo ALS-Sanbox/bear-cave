@@ -10,7 +10,7 @@ export class BrowserSessions {
   async open(adapter: SourceAdapter) {
     const account = adapter.account;
     if (!account || account.kind !== 'browser') throw Error('This source has no browser session integration.');
-    const hosts = [new URL(adapter.manifest.website).hostname]; validateUrl(account.loginUrl,hosts);
+    const hosts = [new URL(adapter.manifest.website).hostname,...(account.hosts??[])]; validateUrl(account.loginUrl,hosts);
     const previous = this.windows.get(adapter.manifest.id); if (previous) { previous.show(); return; }
     const partition = session.fromPartition(`persist:source-${adapter.manifest.id}`);
     partition.setPermissionRequestHandler((_wc,_permission,callback) => callback(false));

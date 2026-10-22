@@ -9,6 +9,7 @@ import type { Registry } from '../sources/registry.js';
 import type { Settings, Chapter, Series } from '../shared/types.js';
 import { SourceError } from '../shared/types.js';
 import { Auth } from './auth.js';
+import { saveCover } from '../engine/files.js';
 
 class ApiError extends Error { constructor(public status: number,message: string) { super(message); } }
 interface Preview { session: string; expires: number; series: Series; chapters: Chapter[]; multipleTranslations: number }
@@ -52,6 +53,16 @@ export function createDashboard(store: Store, queue: Queue, registry: Registry, 
         if (method === 'POST' && url.pathname === '/api/logout') { auth.sessions.delete(session.id); res.setHeader('Set-Cookie',cookie('',0)); return send(res,200,{ ok: true }); }
         if (method === 'GET' && url.pathname === '/api/sources') return send(res,200,registry.manifests());
         if (method === 'GET' && url.pathname === '/api/jobs') return send(res,200,{ paused: Boolean(store.get('queue-paused')), jobs: store.jobs().map(({ root,output,...job }) => ({ ...job, output: output ? path.basename(output) : null })) });
+        if (method === 'POST' && url.pathname === '/api/cover') {
+          const data=z.object({source:z.string().max(30),id:opaqueId}).strict().parse(await body(req));const adapter=registry.get(data.source);
+          if(!adapter.cover)throw new ApiError(400,'Cover art is unavailable for this source.');
+          const series=await adapter.series(data.id,abort.signal),bytes=await adapter.cover(data.id,abort.signal);
+          await saveCover(s.downloadRoot,series.title,bytes,abort.signal);return send(res,200,{saved:true});
+        }
+        if (method === 'POST' && url.pathname === '/api/jobs/delete') {
+          const data=z.object({id:z.string().uuid().optional(),all:z.literal(true).optional()}).strict().refine(d=>Boolean(d.id)!==Boolean(d.all)).parse(await body(req));
+          return send(res,200,{deleted:await queue.remove(data.id?[data.id]:store.jobs().filter(j=>j.state!=='completed').map(j=>j.id))});
+        }
         if (method === 'POST' && url.pathname === '/api/queue') { const { action } = z.object({ action: z.enum(['pause','resume']) }).strict().parse(await body(req)); action === 'pause' ? queue.pauseAll() : queue.resumeAll(); return send(res,200,{ ok: true }); }
         const jobMatch = /^\/api\/jobs\/([a-f0-9-]+)$/.exec(url.pathname);
         if (method === 'POST' && url.pathname === '/api/jobs/clear-failed') { z.object({}).strict().parse(await body(req));return send(res,200,{cleared:await queue.clearFailed()}); }

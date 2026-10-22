@@ -28,5 +28,6 @@ export class Store {
   }
   states(...states: JobState[]) { return this.jobs().filter(j => states.includes(j.state)); }
   clearFailed() { return Number(this.db.prepare("DELETE FROM jobs WHERE state='failed'").run().changes); }
+  remove(id:string) { return Number(this.db.prepare('DELETE FROM jobs WHERE id=?').run(id).changes); }
   close() { this.db.close(); }
 }
