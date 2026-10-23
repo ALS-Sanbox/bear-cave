@@ -1,5 +1,7 @@
 import { describe,it,expect } from 'vitest';
 import path from 'node:path';
+import {writeFile} from 'node:fs/promises';
+import {existsSync} from 'node:fs';
 import { setTimeout as delay } from 'node:timers/promises';
 import { Store } from '../src/core/store.js';
 import { Queue,PagePool } from '../src/engine/queue.js';
@@ -8,6 +10,7 @@ import { SourceError } from '../src/shared/types.js';
 import { workspace,series,chapter,eventually } from './helpers.js';
 
 describe('persistent queue',()=> {
+  it('applies series actions to eligible chapters only and preserves other groups and completed files',async()=>{const w=await workspace(),s=new Store(':memory:');const q=new Queue(s,new Registry([]),()=>w.settings,undefined,async(_job,signal)=>{await delay(30000,undefined,{signal});return 'unused';});try{const other={...series,id:'other-series'},a=s.enqueue(series,chapter(),w.settings).job,b=s.enqueue(other,chapter({seriesId:other.id}),w.settings).job;q.pauseAll();await q.group(series.source,series.id,'resume');expect(s.job(a.id)?.state).toBe('running');expect(s.job(b.id)?.state).toBe('paused');await q.group(series.source,series.id,'pause');expect(s.job(a.id)?.state).toBe('paused');const done=s.enqueue(series,chapter(),w.settings).job,output=path.join(w.dir,'keep.cbz');await writeFile(output,'keep this completed file');s.update(done.id,{state:'completed',output});const failed=s.enqueue(series,chapter(),w.settings).job;s.update(failed.id,{state:'failed'});expect(await q.group(series.source,series.id,'retry')).toBe(1);expect(s.job(failed.id)?.state).toBe('running');expect(await q.group(series.source,series.id,'remove')).toBe(2);expect(s.job(b.id)?.state).toBe('paused');expect(s.job(done.id)?.state).toBe('completed');expect(existsSync(output)).toBe(true);}finally{await q.stop();s.close();await w.cleanup();}});
   it('deletes active and pending jobs only after stopping workers and keeps completed history',async()=>{const w=await workspace(),s=new Store(':memory:');let aborted=false;const q=new Queue(s,new Registry([]),()=>w.settings,undefined,async(_j,signal)=>{try{await delay(30000,undefined,{signal});return 'done';}finally{aborted=signal.aborted;}});try{const active=s.enqueue(series,chapter(),w.settings).job;q.tick();expect(s.job(active.id)?.state).toBe('running');expect(await q.remove([active.id])).toBe(1);expect(aborted).toBe(true);expect(s.job(active.id)).toBeUndefined();const pending=s.enqueue(series,chapter(),w.settings).job;const failed=s.enqueue(series,chapter(),w.settings).job;s.update(failed.id,{state:'failed'});const completed=s.enqueue(series,chapter(),w.settings).job;s.update(completed.id,{state:'completed',output:'kept.cbz'});expect(await q.remove(s.jobs().map(j=>j.id))).toBe(2);expect(s.jobs()).toHaveLength(1);expect(s.job(completed.id)?.output).toBe('kept.cbz');expect(s.enqueue(series,pending.chapter,w.settings).duplicate).toBe(false);}finally{await q.stop();s.close();await w.cleanup();}});
   it('retries a failed download while globally paused and clears only failed entries',async()=>{
     const w=await workspace(),s=new Store(':memory:');let fail=true;
