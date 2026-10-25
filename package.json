@@ -20,6 +20,7 @@
     "dist:win": "npm run build && electron-builder --win nsis --x64 --publish never",
     "smoke:mangadex": "tsx scripts/smoke.ts",
     "smoke:sources": "tsx scripts/smoke-sources.ts",
+    "smoke:browser": "tsx scripts/installed-browser-smoke.ts",
     "format": "node scripts/format-source.mjs"
   },
   "dependencies": {
