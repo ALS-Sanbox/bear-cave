@@ -5,16 +5,18 @@ import { randomUUID } from 'node:crypto';
 import sharp from 'sharp';
 import type { Store } from '../core/store.js';
 import type { Chapter, Series, SourceAdapter, Settings } from '../shared/types.js';
-import { seriesDirectory, checkPath } from './folders.js';
+import { seriesDirectory, findSeriesDirectory, checkPath } from './folders.js';
 import { contained, noLink, saveCover, digest } from './files.js';
 import { verifyOutput } from './verification.js';
 import { matching } from './selection.js';
 import { verifyArchive, validManifest } from './archive.js';
 // Identity comes from source chapter manifests, never from similar folder titles.
 export async function reconcile(store: Store, series: Series, chapters: Chapter[], settings: Settings, signal?: AbortSignal) {
-    const dir = await seriesDirectory(settings.downloadRoot, series, store);
+    const dir = await findSeriesDirectory(settings.downloadRoot, series, store);
     const known = new Map(chapters.map(c => [c.id, c]));
-    for (const entry of await readdir(dir, { withFileTypes: true })) {
+    for (const entry of dir ? await readdir(dir, { withFileTypes: true }) : []) {
+        if (!dir)
+            break;
         signal?.throwIfAborted();
         if (entry.name.startsWith('.') || entry.name.includes('.backup-') || (!entry.isDirectory() && !entry.name.endsWith('.cbz')))
             continue;
@@ -104,8 +106,11 @@ export function libraryStatus(store: Store, series: Series, total: number, root?
 const locks = new Map<string, Promise<void>>();
 export async function syncSeries(store: Store, adapter: SourceAdapter, series: Series, root: string, signal?: AbortSignal, total?: number, options: {
     offline?: boolean;
+    create?: boolean;
 } = {}) {
-    const dir = await seriesDirectory(root, series, store);
+    const dir = options.create === false ? await findSeriesDirectory(root, series, store) : await seriesDirectory(root, series, store);
+    if (!dir)
+        return;
     const key = dir;
     const sourceKey = `${root}:${series.source}:${series.id}`;
     const previous = locks.get(key) ?? Promise.resolve();

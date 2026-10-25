@@ -15,7 +15,7 @@
     "start": "node scripts/run-electron.mjs .",
     "typecheck": "tsc --noEmit && vue-tsc --noEmit -p tsconfig.ui.json",
     "test": "vitest run",
-    "test:electron": "node scripts/run-electron.mjs scripts/electron-smoke.cjs && node scripts/run-electron.mjs scripts/main-smoke.cjs && node scripts/run-electron.mjs scripts/main-smoke.cjs --port-conflict && node scripts/run-electron.mjs scripts/download-ui-smoke.cjs",
+    "test:electron": "node scripts/run-electron.mjs scripts/electron-smoke.cjs && node scripts/run-electron.mjs scripts/main-smoke.cjs && node scripts/run-electron.mjs scripts/main-smoke.cjs --port-conflict && node scripts/run-electron.mjs scripts/download-ui-smoke.cjs && node scripts/run-electron.mjs scripts/search-ui-smoke.cjs && node scripts/run-electron.mjs scripts/rendered-source-smoke.cjs",
     "build": "node scripts/build-assets.mjs && tsc -p tsconfig.build.json && vite build && node scripts/copy-preload.mjs",
     "dist:win": "npm run build && electron-builder --win nsis --x64 --publish never",
     "smoke:mangadex": "tsx scripts/smoke.ts",

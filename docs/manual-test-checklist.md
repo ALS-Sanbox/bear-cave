@@ -14,7 +14,7 @@ Automated checks use temporary data and offline fixtures. These user-controlled 
 - [ ] Successful dashboard sign-ins do not cause lockout. Repeated wrong passwords throttle. Local password replacement revokes browser sessions and permits the new password.
 - [ ] Open MangaDex locally and try website sign-in. Independently test personal-client API login if you have an approved client. Check inline success/failure and encrypted storage; never share credentials or logs containing secrets.
 - [ ] Complete normal local verification for a held source, then Retry affected downloads. Check held count/reason in Queue and Sources; reset a stale hold after removing the original jobs.
-- [ ] Treat enabled connectors as enabled code, not proof of current access. ToonGod's real reader remains unverified; do not bypass site restrictions.
+- [ ] Treat enabled connectors as enabled code, not proof of current access. ToonGod is removed. Comix uses a local browser renderer; pause for human checks and verify complete chapter pagination and lazy image collection.
 
 ## Downloads, identity and history
 

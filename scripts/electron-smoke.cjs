@@ -24,6 +24,15 @@ app.whenReady().then(async()=>{
   assert.equal(safeStorage.decryptString(safeStorage.encryptString('temporary secret')),'temporary secret');
   const {SecretVault}=await import(pathToFileURL(path.resolve('dist/main/desktop/secrets.js')).href);const vault=new SecretVault(path.join(temp,'secrets'));await vault.put('fixture','not-a-real-secret');assert(!fs.readFileSync(path.join(temp,'secrets','fixture.dpapi')).includes(Buffer.from('not-a-real-secret')));assert.equal(await vault.get('fixture'),'not-a-real-secret');await vault.remove('fixture');assert(!fs.existsSync(path.join(temp,'secrets','fixture.dpapi')));
   const {BrowserSessions}=await import(pathToFileURL(path.resolve('dist/main/desktop/sessions.js')).href);const sourceSessions=new BrowserSessions();await session.fromPartition('persist:source-toongod').cookies.set({url:'https://www.toongod.org/',name:'fixture-isolation',value:'toongod-only',secure:true});assert((await sourceSessions.cookies('toongod',new URL('https://www.toongod.org/'))).includes('toongod-only'));assert.equal(await sourceSessions.cookies('thunder',new URL('https://www.toongod.org/')),'');assert.equal(await sourceSessions.cookies('toongod',new URL('https://en-thunderscans.com/')),'');
+  // Ordinary requests must retain the exact session used by the local source window.
+  const fixtureSessions=new BrowserSessions(async()=>{}),sourceTransport=fixtureSessions.transport('toongod',['www.toongod.org','toongod.org']);
+  const toon=session.fromPartition('persist:source-toongod');let requested='';
+  await toon.protocol.handle('https',request=>{requested=request.url;return new Response('<h1>Saved session fixture</h1>',{headers:{'Content-Type':'text/html'}});});
+  const page=await sourceTransport.html('https://www.toongod.org/?s=fixture',['www.toongod.org','toongod.org']);
+  assert(page.includes('Saved session fixture'));assert(toon.getUserAgent().includes('Chrome/'),'source session retains its native Chromium user agent');assert(requested.includes('?s=fixture'),'transport uses the isolated partition protocol handler');
+  // The handler is registered only in this partition; default-session/Node fetches cannot reach it.
+  await assert.rejects(()=>sourceTransport.html('https://127.0.0.1/private',['www.toongod.org']),/not allowed/);
+  toon.protocol.unhandle('https');fixtureSessions.close();
   const local=new BrowserWindow({show:false,webPreferences:{preload:path.resolve('dist/main/desktop/preload.cjs'),sandbox:true,contextIsolation:true,nodeIntegration:false}});
   ipcMain.handle('local:read',()=>({settings,adminConfigured:true}));
   let localSource='';ipcMain.handle('local:source-session',(_event,id)=>{localSource=id;return{ok:true};});
@@ -55,8 +64,8 @@ app.whenReady().then(async()=>{
   assert((await remote.webContents.executeJavaScript('document.body.innerText')).includes('Find your next chapter.'));
   await remote.webContents.executeJavaScript(`Array.from(document.querySelectorAll('nav button')).find(b=>b.textContent.includes('Sources')).click()`);
   await new Promise(r=>setTimeout(r,100));
-  assert((await remote.webContents.executeJavaScript('document.body.innerText')).includes('ToonGod'));
-  assert.equal(await remote.webContents.executeJavaScript('document.querySelectorAll(".source-grid article").length'),6);
+  assert((await remote.webContents.executeJavaScript('document.body.innerText')).includes('Comix'));assert(!(await remote.webContents.executeJavaScript('document.querySelector(".source-grid").innerText')).includes('ToonGod'));assert.equal(await remote.webContents.executeJavaScript('Array.from(document.querySelectorAll(".source-grid button")).some(b=>b.innerText.includes("Explore Comix"))'),true);
+  assert.equal(await remote.webContents.executeJavaScript('document.querySelectorAll(".source-grid article").length'),8);
   assert(await remote.webContents.executeJavaScript('Array.from(document.images).every(i=>i.complete && i.naturalWidth>0)'));
   server.auth.clear();
   await new Promise(r=>setTimeout(r,3000));

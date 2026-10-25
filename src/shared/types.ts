@@ -34,6 +34,7 @@ export interface Chapter {
     localChapterId?: string;
 }
 export interface PageResult<T> {
+    totalExact?: boolean;
     items: T[];
     total: number;
     offset: number;

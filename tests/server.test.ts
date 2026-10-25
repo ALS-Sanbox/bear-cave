@@ -1,3 +1,4 @@
+import { readdir } from 'node:fs/promises';
 import { describe,it,expect } from 'vitest';
 import path from 'node:path';
 import { request as httpRequest } from 'node:http';
@@ -17,6 +18,19 @@ async function harness(count = 2) {
   return {w,store,queue,dashboard,origin,request,login,cleanup:async()=>{await dashboard.close();await queue.stop();store.close();await w.cleanup();}};
 }
 describe('dashboard security and queue API',()=> {
+  it('verifies saved history after its source has been removed',async()=>{const h=await harness();try{
+    await h.login();const c=chapter({source:'toongod'}),j=h.store.enqueue({id:c.seriesId,source:c.source,title:'Removed source fixture',description:''},c,h.w.settings).job;
+    h.store.update(j.id,{state:'completed',output:path.join(h.w.dir,'missing.cbz')});
+    const response=await h.request('/api/jobs/verify',{id:j.id});expect(response.status).toBe(200);expect((await response.json()).state).toBe('missing');expect(h.store.job(j.id)?.state).toBe('completed');
+  }finally{await h.cleanup();}});
+
+  it('does not create series folders when searching, viewing, previewing, or queueing paused downloads',async()=>{const h=await harness();try{
+    await h.login();const id='11111111-1111-4111-8111-111111111111';
+    for(const route of ['/api/search?source=mangadex&q=fixture',`/api/series?source=mangadex&id=${id}`,`/api/chapters?source=mangadex&id=${id}`]){expect((await h.request(route)).status).toBe(200);expect(await readdir(h.w.dir)).toEqual([]);}
+    const preview=await(await h.request('/api/preview',{source:'mangadex',seriesId:id,language:'en',all:true})).json();expect(preview.count).toBe(2);expect(await readdir(h.w.dir)).toEqual([]);
+    expect((await h.request('/api/enqueue',{token:preview.token,confirmTranslations:true})).status).toBe(200);expect(h.store.jobs()).toHaveLength(2);expect(await readdir(h.w.dir)).toEqual([]);
+  }finally{await h.cleanup();}});
+
   it('selects all 187 server-side regardless of filters, excludes stable IDs and deduplicates repeated submissions',async()=>{const h=await harness(187);try{
     await h.login(); const id='11111111-1111-4111-8111-111111111111';
     const page=await(await h.request(`/api/chapters?source=mangadex&id=${id}`)).json();

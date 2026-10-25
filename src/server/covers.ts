@@ -17,7 +17,11 @@ export async function readLibraryCover(store: Store, root: string, source: strin
         await checkPath(root, dir);
         const marker = contained(dir, '.bear-cave-series.json');
         await checkPath(root, marker);
-        if ((await lstat(marker)).size > 16384 || !markerHasIdentity(JSON.parse(await readFile(marker, 'utf8')), `${source}:${id}`))
+        if ((await lstat(marker)).size > 16384)
+            return;
+        const owner = JSON.parse(await readFile(marker, 'utf8'));
+        // Read-only cross-source lookups may map an alias before a download adds it to the marker.
+        if (!markerHasIdentity(owner, `${source}:${id}`) && (typeof owner?.identity !== 'string' || store.folder(root, owner.identity) !== folder))
             return;
         const file = contained(dir, 'coverart.png');
         await checkPath(root, file);

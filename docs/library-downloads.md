@@ -34,3 +34,5 @@ Modified files:
 No dependencies were added. Tray architecture, authentication, source sessions, queue uniqueness and existing library files are preserved. The root causes, detection rules, safe replacement procedure and remaining ToonGod limitation are described above.
 
 Cross-source folder mapping and startup consolidation now extend these rules: see [shared series folders](shared-series-folders.md). Exact recorded titles may share a folder; chapter IDs and original sources remain distinct.
+
+Folder creation is now deferred: browsing, reconciliation and download previews use a filesystem lookup that never creates or repairs directories or series markers. Metadata refresh during these operations only runs if an existing series folder is found. A stale database mapping cannot recreate a removed folder while browsing. Chapter workers and explicit cover downloads retain folder creation. Cross-source lookup can remember an existing folder in SQLite; its marker is updated only when a real download uses it.

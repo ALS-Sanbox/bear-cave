@@ -123,13 +123,18 @@ else {
             store.set('queue-paused', true);
             await log(`Library consolidation incomplete; downloads paused: ${(e as Error).message}`);
         }
-        const registry = new Registry([new MangaDex(sharedHttp), ...websiteAdapters((id, url) => sessions.cookies(id, url))]);
+        const comixHosts = ['comix.to', 'static.comix.to'];
+        const registry = new Registry([new MangaDex(sharedHttp), ...websiteAdapters((id, url) => sessions.cookies(id, url), {
+                hosts: comixHosts, transport: sessions.transport('comix', comixHosts), render: (url, mode, signal) => sessions.render('comix', comixHosts, url, mode, signal)
+            })]);
         if (combinedFolders) {
             const series = new Map(store.jobs().filter(j => path.resolve(j.root) === path.resolve(settings.downloadRoot)).map(j => [`${j.source}:${j.series.id}`, j.series]));
             for (const s of series.values()) {
+                if (!registry.manifests().some(m => m.id === s.source && m.status === 'operational'))
+                    continue;
                 if (!store.libraryJobs(s.source, s.id, settings.downloadRoot).some(j => j.source !== s.source))
                     continue;
-                await syncSeries(store, registry.get(s.source), s, settings.downloadRoot, undefined, undefined, { offline: true }).catch(e => log(`Library metadata: ${(e as Error).message}`));
+                await syncSeries(store, registry.get(s.source), s, settings.downloadRoot, undefined, undefined, { offline: true, create: false }).catch(e => log(`Library metadata: ${(e as Error).message}`));
             }
         }
         queue = new Queue(store, registry, () => settings);

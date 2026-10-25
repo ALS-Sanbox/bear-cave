@@ -1025,3 +1025,25 @@ footer span {
     flex-wrap: wrap;
   }
 }
+
+.search-sources {
+  margin-bottom: 1rem;
+}
+
+.search-source {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: .6rem;
+  padding: .4rem 0;
+}
+
+.search-source strong {
+  min-width: 9rem;
+}
+
+.search-source span {
+  flex: 1;
+  min-width: 10rem;
+  overflow-wrap: anywhere;
+}

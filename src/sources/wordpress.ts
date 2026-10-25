@@ -5,6 +5,8 @@ export class WordPressSource extends WebsiteSource {
     constructor(id: 'thunder' | 'toongod', http?: import('./website.js').WebsiteTransport, cookies?: import('./http.js').RequestOptions['cookies']) {
         super(http, cookies);
         this.manifest = id === 'thunder' ? manifest(id, 'ThunderScans', 'https://en-thunderscans.com/', ['en-thunderscans.com']) : manifest(id, 'ToonGod', 'https://www.toongod.org/', ['www.toongod.org', 'toongod.org', '*.toongod.org'], 'Enabled connector; live access requires local human verification. Reader markup remains unverified against the protected site.');
+        if (id === 'toongod')
+            this.manifest.apiHosts = ['www.toongod.org', 'toongod.org'];
     }
     manifest: import('../shared/types.js').SourceManifest;
     protected override async page(url: string, signal?: AbortSignal) {
@@ -13,7 +15,7 @@ export class WordPressSource extends WebsiteSource {
         }
         catch (e) {
             if (e instanceof SourceError && e.kind === 'action_required')
-                throw new SourceError(`${this.manifest.name}: public access was denied or a human verification challenge was returned. Open the source session from the local tray and retry if access is available. Search, chapter lists and readers cannot be verified while blocked.`, 'action_required');
+                throw new SourceError(`${this.manifest.name}: public access was denied or a human verification challenge was returned. Open the local source window and confirm you can search there, then use Retry affected downloads. Desktop search and chapter reads use the same browser session; new challenges still require manual action.`, 'action_required');
             throw e;
         }
     }

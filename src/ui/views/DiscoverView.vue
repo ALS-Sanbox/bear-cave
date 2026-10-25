@@ -14,6 +14,7 @@ const languages = languageOptions;
 <section>
   <form class="searchbar card" @submit.prevent="model.search(0)">
     <select v-model="model.selectedSource" aria-label="Source" class="source-select">
+      <option value="all">All sources</option>
       <option v-for="source in model.enabledSources" :key="source.id" :value="source.id">{{source.name}}</option>
     </select>
     <input v-model="model.query" aria-label="Search manga" placeholder="Search a title..." required maxlength="200">
@@ -34,10 +35,10 @@ const languages = languageOptions;
         </div>
       </div>
     </div>
-    <form v-if="model.detail.source==='mangadex'" class="filters card" @submit.prevent="model.perform(()=>model.loadChapters(0))">
+    <form v-if="['mangadex','comix'].includes(model.detail.source)" class="filters card" @submit.prevent="model.perform(()=>model.loadChapters(0))">
       <label>
         Language
-        <select v-model="model.language">
+        <select v-model="model.language" :disabled="model.detail.source==='comix'">
           <option v-for="[code,name] in languages" :key="code" :value="code">{{name}}</option>
           <option v-if="!languages.some(([code])=>code===model.language)" :value="model.language">{{languageName(model.language)}}</option>
         </select>
@@ -117,10 +118,19 @@ const languages = languageOptions;
     </div>
   </template>
   <template v-else-if="model.results">
-    <h2>Search results · {{model.results.total.toLocaleString()}} titles</h2>
-    <div v-if="!model.results.items.length" class="empty card">No matching titles.</div>
+    <h2>Search results · {{(model.selectedSource==='all'||model.results.totalExact===false?model.results.items.length:model.results.total).toLocaleString()}} titles</h2>
+    <div v-if="model.selectedSource==='all'" class="search-sources card" aria-live="polite">
+      <div v-for="source in model.searchStates" :key="source.id" class="search-source">
+        <strong>{{source.name}}</strong>
+        <span v-if="['waiting','searching'].includes(source.state)">{{source.state==='waiting'?'Waiting':'Searching...'}}</span>
+        <span v-else-if="source.state==='error'">{{source.error}}</span>
+        <span v-else>{{source.loaded}} titles loaded</span>
+        <button v-if="source.state==='error'||(source.state==='done'&&source.offset+source.limit<source.total&&source.offset+source.limit<10000)" :disabled="model.busy" @click="model.searchMore(source.id)">{{source.state==='error'?'Retry':'Load more'}}</button>
+      </div>
+    </div>
+    <div v-if="!model.results.items.length" class="empty card">{{model.searching?'Searching sources...':'No titles returned. Check source messages above for unavailable sources.'}}</div>
     <div class="result-grid">
-      <button v-for="series in model.results.items" :key="series.id" class="result card" :disabled="model.busy" @click="model.openSeries(series)">
+      <button v-for="series in model.results.items" :key="`${series.source}:${series.id}`" class="result card" :disabled="model.busy" @click="model.openSeries(series)">
         <CoverImage :source="series.source" :id="series.id" :title="series.title" :revision="model.coverRevision"/>
         <div>
           <p class="eyebrow">{{series.source}}</p>
@@ -130,15 +140,15 @@ const languages = languageOptions;
         </div>
       </button>
     </div>
-    <div class="pagination">
-      <button :disabled="model.busy||!model.results.offset" @click="model.search(Math.max(0,model.results.offset-model.results.limit))">Previous</button>
+    <div v-if="model.selectedSource!=='all'" class="pagination">
+      <button :disabled="model.busy||model.searching||!model.results.offset" @click="model.search(Math.max(0,model.results.offset-model.results.limit))">Previous</button>
       <span>Page {{Math.floor(model.results.offset/model.results.limit)+1}}</span>
-      <button :disabled="model.busy||model.results.offset+model.results.limit>=model.results.total||model.results.offset+model.results.limit*2>10000" @click="model.search(model.results.offset+model.results.limit)">Next</button>
+      <button :disabled="model.busy||model.searching||model.results.offset+model.results.limit>=model.results.total||model.results.offset+model.results.limit*2>10000" @click="model.search(model.results.offset+model.results.limit)">Next</button>
     </div>
   </template>
   <div v-else class="empty card">
     <h2>Good stories start here.</h2>
-    <p>Choose a source and search for a series.</p>
+    <p>Search all sources for a series, or choose a specific source.</p>
   </div>
 </section>
 </template>

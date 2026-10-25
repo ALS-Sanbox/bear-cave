@@ -214,7 +214,8 @@ export function createDashboard(store: Store, queue: Queue, registry: Registry, 
                     try {
                         const verification = await verifyOutput(job, abort.signal);
                         store.update(id, { verification });
-                        await syncSeries(store, registry.get(job.source), job.series, job.root, abort.signal).catch(e => console.warn('Metadata:', (e as Error).message));
+                        if (registry.manifests().some(m => m.id === job.source && m.status === 'operational'))
+                            await syncSeries(store, registry.get(job.source), job.series, job.root, abort.signal, undefined, { create: false }).catch(e => console.warn('Metadata:', (e as Error).message));
                         return send(res, 200, verification);
                     }
                     finally {
@@ -311,7 +312,7 @@ export function createDashboard(store: Store, queue: Queue, registry: Registry, 
                         const all = await matching(adapter, id, { language: '*' }, undefined, abort.signal);
                         await reconcile(store, series, all, s, abort.signal);
                         if (store.seriesJobs(series.source, series.id).length)
-                            await syncSeries(store, adapter, series, s.downloadRoot, abort.signal, all.length).catch(e => console.warn('Metadata:', (e as Error).message));
+                            await syncSeries(store, adapter, series, s.downloadRoot, abort.signal, all.length, { create: false }).catch(e => console.warn('Metadata:', (e as Error).message));
                         return send(res, 200, { ...publicSeries(series), library: libraryStatus(store, series, all.length, s.downloadRoot) });
                     }
                     const page = await adapter.chapters(id, { language: url.searchParams.get('language') ?? 'en', group: url.searchParams.get('group') || undefined }, offset, abort.signal);
@@ -339,7 +340,7 @@ export function createDashboard(store: Store, queue: Queue, registry: Registry, 
                     try {
                         const adapter = registry.get(data.source), series = await adapter.series(data.seriesId, abort.signal), resolved = await matching(adapter, data.seriesId, data.all ? { language: '*' } : data, data.all ? undefined : data.ids, abort.signal), chapters = resolved.filter(c => !data.exclude?.includes(c.id));
                         await reconcile(store, series, chapters, s, abort.signal);
-                        await syncSeries(store, adapter, series, s.downloadRoot, abort.signal, data.all ? resolved.length : undefined).catch(e => console.warn('Metadata:', (e as Error).message));
+                        await syncSeries(store, adapter, series, s.downloadRoot, abort.signal, data.all ? resolved.length : undefined, { create: false }).catch(e => console.warn('Metadata:', (e as Error).message));
                         return send(res, 200, previewFor(session.id, series, chapters));
                     }
                     finally {

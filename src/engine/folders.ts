@@ -69,6 +69,68 @@ export async function checkPath(root: string, file: string) {
         await noLink(current);
     }
 }
+function shareable(marker: any, series: Series) {
+    const ids = [marker?.identity, ...(Array.isArray(marker?.identities) ? marker.identities : [])];
+    return typeof marker?.title === 'string' && titleKey(marker.title) === titleKey(series.title) &&
+        ids.every(id => typeof id === 'string' && !id.startsWith(`${series.source}:`));
+}
+// Filesystem lookup only: never mkdir, repair markers, or download metadata while browsing.
+export async function findSeriesDirectory(root: string, series: Series, store?: Store): Promise<string | undefined> {
+    return withDirectoryLock(root, async () => {
+        try {
+            root = await realpath(root);
+        }
+        catch (e) {
+            if ((e as NodeJS.ErrnoException).code === 'ENOENT')
+                return;
+            throw e;
+        }
+        const identity = `${series.source}:${series.id}`, known = store?.folder(root, identity);
+        const recorded = store?.legacyOutput(series.source, series.id, root);
+        const entries: {
+            dir: string;
+            marker: any;
+        }[] = [];
+        for (const entry of await readdir(root, { withFileTypes: true })) {
+            if (!entry.isDirectory() || entry.name.startsWith('.'))
+                continue;
+            const dir = contained(root, entry.name);
+            try {
+                await checkPath(root, dir);
+                entries.push({ dir, marker: await markerData(contained(dir, '.bear-cave-series.json')) });
+            }
+            catch { /* Unknown and legacy directories require recorded provenance below. */
+            }
+        }
+        const exact = entries.find(e => markerHasIdentity(e.marker, identity));
+        const matching = entries.filter(e => typeof e.marker?.title === 'string' && titleKey(e.marker.title) === titleKey(series.title));
+        let found = exact?.dir ?? (matching.length === 1 && shareable(matching[0].marker, series) ? matching[0].dir : undefined);
+        if (known) {
+            const dir = contained(root, known);
+            await checkPath(root, dir);
+            const marked = entries.find(e => e.dir === dir);
+            if (marked && !markerHasIdentity(marked.marker, identity) && !shareable(marked.marker, series))
+                throw new SourceError('The mapped series folder belongs to another identity. Check local storage.');
+            if (marked)
+                found = dir;
+        }
+        if (!found && recorded?.output && !store!.folderConflict(path.dirname(recorded.output), series.source, series.id)) {
+            const dir = path.dirname(recorded.output);
+            await checkPath(root, dir);
+            try {
+                if ((await lstat(dir)).isDirectory())
+                    found = dir;
+            }
+            catch (e) {
+                if ((e as NodeJS.ErrnoException).code !== 'ENOENT')
+                    throw e;
+            }
+        }
+        if (found)
+            store?.mapFolder(root, identity, path.relative(root, found));
+        return found;
+    });
+}
 export async function seriesDirectory(root: string, series: Series, store?: Store): Promise<string> {
     return withDirectoryLock(root, () => resolveSeriesDirectory(root, series, store));
 }
@@ -79,8 +141,12 @@ async function resolveSeriesDirectory(root: string, series: Series, store?: Stor
         const dir = contained(root, known);
         await checkPath(root, dir);
         await mkdir(dir, { recursive: true });
-        if (!await claimSeries(dir, identity, series.title))
-            throw new SourceError('The mapped series folder belongs to another identity. Choose another download root in local Settings.');
+        if (!await claimSeries(dir, identity, series.title)) {
+            const marker = await markerData(contained(dir, '.bear-cave-series.json'));
+            if (!shareable(marker, series))
+                throw new SourceError('The mapped series folder belongs to another identity. Choose another download root in local Settings.');
+            await addSeriesIdentity(dir, identity, series.title);
+        }
         return dir;
     }
     // Adopt recorded legacy output only when no other identity shares that directory.

@@ -19,7 +19,7 @@ app.whenReady().then(async()=>{
   const png=await require('sharp')({create:{width:2,height:3,channels:3,background:'#a7470b'}}).png().toBuffer();
   let coverOffline=false,failPreview=false,allowAll=true,activeListings=0;
   const source={manifest:{id:'mangadex',name:'Fixture source',website:'https://fixture.example/',status:'operational',interfaceVersion:1,capabilities:['search','series','chapters','public-download'],apiHosts:['fixture.example'],imageHosts:['fixture.example'],recommended:{chapters:1,pageRequests:1,requestIntervalMs:1000}},search:async()=>({items:[series],total:1,offset:0,limit:20}),series:async()=>series,chapters:async(_id,_filter,offset,signal)=>{activeListings++;try{await delay(150,undefined,{signal});if(failPreview)throw new SourceError('Fixture source unavailable. Try again.');if(offset>0&&!allowAll)throw new SourceError('Single selection scanned unrelated chapter pages.');return{items:chapters.slice(offset,offset+100),total:chapters.length,offset,limit:100};}finally{activeListings--;}},chapter:async id=>chapters.find(c=>c.id===id),resolve:async()=>({revision:'fixture',urls:['https://fixture.example/1.png','https://fixture.example/2.png']}),readPage:async()=>png,cover:async()=>{if(coverOffline)throw Error('Cover source offline');return png;}};
-  const registry=new Registry([source]);queue=new Queue(store,registry,()=>settings);dashboard=createDashboard(store,queue,registry,()=>settings,path.resolve('dist/ui'));const port=await dashboard.listen(0);
+  const registry=new Registry([source]);queue=new Queue(store,registry,()=>settings);queue.start();dashboard=createDashboard(store,queue,registry,()=>settings,path.resolve('dist/ui'));const port=await dashboard.listen(0);
   window=new BrowserWindow({show:false,width:1000,height:800,webPreferences:{sandbox:true,contextIsolation:true,nodeIntegration:false,backgroundThrottling:false}});
   const js=script=>window.webContents.executeJavaScript(script,true).catch(error=>{throw new Error(`${error.message}\nRenderer script: ${script}`);});
   const click=selector=>js(`document.querySelector(${JSON.stringify(selector)}).click()`);
@@ -36,8 +36,10 @@ app.whenReady().then(async()=>{
   await until(()=>js('document.querySelector(".result .series-cover").complete&&document.querySelector(".result .series-cover").naturalWidth>0'),'search thumbnail rendered before library download');
   assert((await js('document.querySelector(".result .series-cover").currentSrc')).includes('/api/cover-image?'),'search uses source artwork instead of logo fallback');
   assert(!fs.existsSync(path.join(settings.downloadRoot,series.title,'coverart.png')),'search thumbnail needs no saved cover');
+  assert(!fs.existsSync(path.join(settings.downloadRoot,series.title)),'search does not create a series folder');
   await click('.result');
   await until(()=>js('document.querySelectorAll(".chapters tbody tr").length===100'),'long chapter list');allowAll=false;
+  assert(!fs.existsSync(path.join(settings.downloadRoot,series.title)),'viewing series details does not create a folder');
   window.setSize(390,844);await delay(250);allowAll=true;
   assert(await js('document.documentElement.scrollWidth<=innerWidth'),'mobile discover has no horizontal overflow');
   await js('Array.from(document.querySelectorAll("button")).find(b=>b.textContent==="Select This Page").click()');

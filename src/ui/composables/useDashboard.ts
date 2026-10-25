@@ -42,10 +42,22 @@ export function useDashboard() {
         remembered.source = undefined;
     if (!remembered.filters || typeof remembered.filters !== 'object' || Array.isArray(remembered.filters))
         remembered.filters = {};
-    const selectedSource = ref(remembered.source ?? 'mangadex'), language = ref('en'), group = ref(''), query = ref(''), results = ref<PageResult<Series>>(), detail = ref<Series>(), chapters = ref<PageResult<Chapter>>(), selected = ref<string[]>([]), knownGroups = ref<{
+    const selectedSource = ref('all'), language = ref('en'), group = ref(''), query = ref(''), results = ref<PageResult<Series>>(), detail = ref<Series>(), chapters = ref<PageResult<Chapter>>(), selected = ref<string[]>([]), knownGroups = ref<{
         id: string;
         name: string;
     }[]>([]);
+    const searching = ref(false), searchStates = ref<{
+        id: string;
+        name: string;
+        state: 'waiting' | 'searching' | 'done' | 'error';
+        error?: string;
+        retryOffset?: number;
+        total: number;
+        offset: number;
+        limit: number;
+        loaded: number;
+    }[]>([]);
+    let searchController: AbortController | undefined, searchedQuery = '';
     const sources = ref<SourceManifest[]>([]), jobs = ref<Job[]>([]), counts = ref<Record<string, number>>({}), holds = ref<Hold[]>([]), paused = ref(false), total = ref(0), offset = ref(0), pageSize = 100;
     const librarySearch = ref(''), sourceFilter = ref(''), statusFilter = ref(''), follows = ref<FollowedSeries[]>([]);
     const enabledSources = computed(() => sources.value.filter(s => s.status === 'operational')), activeCount = computed(() => counts.value.running ?? 0), remainingCount = computed(() => Object.entries(counts.value).reduce((n, [state, count]) => n + (state === 'completed' ? 0 : count), 0));
@@ -63,20 +75,24 @@ export function useDashboard() {
     const savePreferences = () => {
         remembered.source = selectedSource.value;
         remembered.filters ??= {};
-        remembered.filters[selectedSource.value] = { language: language.value, group: group.value };
+        remembered.filters[detail.value?.source ?? selectedSource.value] = { language: language.value, group: group.value };
         try {
             localStorage.setItem('bear-cave-preferences', JSON.stringify(remembered));
         }
         catch {
         }
     };
-    function restoreFilters() {
-        const saved = remembered.filters?.[selectedSource.value];
-        language.value = selectedSource.value === 'mangadex' && typeof saved?.language === 'string' && /^[a-z]{2,3}(-[a-z]{2})?$/.test(saved.language) ? saved.language : 'en';
-        group.value = selectedSource.value === 'mangadex' && typeof saved?.group === 'string' && /^[a-zA-Z0-9_-]{0,1200}$/.test(saved.group) ? saved.group : '';
+    function restoreFilters(source = selectedSource.value) {
+        const saved = remembered.filters?.[source];
+        language.value = source === 'mangadex' && typeof saved?.language === 'string' && /^[a-z]{2,3}(-[a-z]{2})?$/.test(saved.language) ? saved.language : 'en';
+        group.value = ['mangadex', 'comix'].includes(source) && typeof saved?.group === 'string' && /^[a-zA-Z0-9_-]{0,1200}$/.test(saved.group) ? saved.group : '';
     }
     restoreFilters();
     watch(selectedSource, () => {
+        searchController?.abort();
+        searching.value = false;
+        searchStates.value = [];
+        detail.value = undefined;
         restoreFilters();
         savePreferences();
         results.value = undefined;
@@ -91,6 +107,10 @@ export function useDashboard() {
         const data = await response.json();
         if (!response.ok) {
             if (response.status === 401 && url !== 'login') {
+                searchController?.abort();
+                searching.value = false;
+                results.value = undefined;
+                searchStates.value = [];
                 authenticated.value = false;
                 csrf.value = '';
                 jobs.value = [];
@@ -198,6 +218,7 @@ export function useDashboard() {
     async function logout() {
         await perform(async () => {
             await api('logout', {});
+            searchController?.abort();
             authenticated.value = false;
             password.value = '';
             jobs.value = [];
@@ -207,13 +228,80 @@ export function useDashboard() {
             follows.value = [];
         });
     }
+    async function searchPage(source: string, at: number, controller: AbortController, append = false) {
+        const state = searchStates.value.find(s => s.id === source);
+        if (!state)
+            return;
+        state.state = 'searching';
+        state.error = undefined;
+        const signal = AbortSignal.any([controller.signal, AbortSignal.timeout(35000)]);
+        try {
+            const page = await api<PageResult<Series>>(`search?source=${source}&q=${encodeURIComponent(searchedQuery)}&offset=${at}`, undefined, signal);
+            if (controller !== searchController || controller.signal.aborted)
+                return;
+            const previous = selectedSource.value === 'all' || append ? results.value?.items ?? [] : [];
+            const unique = new Map(previous.map(s => [`${s.source}:${s.id}`, s]));
+            page.items.forEach(s => unique.set(`${s.source}:${s.id}`, s));
+            const order = new Map(searchStates.value.map((s, i) => [s.id, i]));
+            const items = [...unique.values()].sort((a, b) => (order.get(a.source) ?? 0) - (order.get(b.source) ?? 0));
+            state.state = 'done';
+            state.offset = page.offset;
+            state.limit = page.limit;
+            state.total = page.total;
+            state.loaded = items.filter(s => s.source === source).length;
+            results.value = {
+                items, totalExact: selectedSource.value === 'all' ? false : page.totalExact, total: selectedSource.value === 'all' ? searchStates.value.reduce((n, s) => n + s.total, 0) : page.total, offset: selectedSource.value === 'all' ? 0 : page.offset, limit: page.limit
+            };
+        }
+        catch (e) {
+            if (controller !== searchController || controller.signal.aborted)
+                return;
+            state.state = 'error';
+            state.retryOffset = at;
+            state.error = signal.aborted ? 'Search timed out. Retry this source.' : (e as Error).message;
+            if (selectedSource.value !== 'all')
+                error.value = state.error;
+        }
+    }
     async function search(at = 0) {
-        await perform(async () => {
-            savePreferences();
-            coverRevision.value++;
-            results.value = await api(`search?source=${selectedSource.value}&q=${encodeURIComponent(query.value)}&offset=${at}`);
-            detail.value = undefined;
-        });
+        if (busy.value || !query.value.trim())
+            return;
+        searchController?.abort();
+        const controller = new AbortController();
+        searchController = controller;
+        searching.value = true;
+        error.value = '';
+        message.value = '';
+        savePreferences();
+        coverRevision.value++;
+        detail.value = undefined;
+        searchedQuery = query.value.trim();
+        const targets = selectedSource.value === 'all' ? enabledSources.value : enabledSources.value.filter(s => s.id === selectedSource.value);
+        searchStates.value = targets.map(s => ({
+            id: s.id, name: s.name, state: 'waiting', total: 0, offset: at, limit: 0, loaded: 0
+        }));
+        results.value = {
+            items: [], total: 0, offset: at, limit: 50
+        };
+        let next = 0;
+        try {
+            await Promise.all(Array.from({ length: Math.min(3, targets.length) }, async () => {
+                while (next < targets.length && !controller.signal.aborted) {
+                    const target = targets[next++];
+                    await searchPage(target.id, at, controller);
+                }
+            }));
+        }
+        finally {
+            if (searchController === controller)
+                searching.value = false;
+        }
+    }
+    async function searchMore(source: string) {
+        const state = searchStates.value.find(s => s.id === source), controller = searchController;
+        if (!state || !controller || controller.signal.aborted || state.state === 'searching')
+            return;
+        await searchPage(source, state.state === 'error' ? state.retryOffset ?? state.offset : state.offset + state.limit, controller, true);
     }
     const allSelected = ref(false), excluded = ref<string[]>([]), seriesTotal = ref(0);
     const selectedCount = computed(() => allSelected.value ? Math.max(0, seriesTotal.value - excluded.value.length) : selected.value.length);
@@ -260,11 +348,12 @@ export function useDashboard() {
     }
     async function openSeries(series: Series) {
         await perform(async () => {
-            if (selectedSource.value !== series.source) {
+            if (selectedSource.value !== 'all' && selectedSource.value !== series.source) {
                 selectedSource.value = series.source;
                 await Promise.resolve();
             }
             detail.value = await api(`series?source=${series.source}&id=${encodeURIComponent(series.id)}`);
+            restoreFilters(series.source);
             deselectAll();
             seriesTotal.value = detail.value!.library?.total ?? 0;
             knownGroups.value = [];
@@ -517,6 +606,7 @@ export function useDashboard() {
         poll();
     });
     onUnmounted(() => {
+        searchController?.abort();
         stopped = true;
         if (timer)
             clearTimeout(timer);
@@ -524,7 +614,7 @@ export function useDashboard() {
         document.removeEventListener('visibilitychange', visibility);
     });
     return {
-        coverRevision, allSelected, excluded, seriesTotal, selectedCount, isSelected, toggleChapter, selectPage, selectAll, deselectAll, prepareSelected, chapterAction, authenticated, setupRequired, password, busy, error, message, view, selectedSource, language, group, query, results, detail, chapters, selected, knownGroups, sources, jobs, counts, holds, paused, total, offset, pageSize, librarySearch, sourceFilter, statusFilter, follows, enabledSources, activeCount, remainingCount, sourceGroups, preview, previewLoading, previewError, confirmTranslations, downloadDialog, perform, refresh, login, logout, search, loadChapters, openSeries, prepare, cancelPreview, enqueue, control, groupControl, allControl, deleteDownloads, clearFailed, retrySource, verify, downloadAgain, downloadCover, followSeries, saveFollow, checkFollow, removeFollow, page, applyLibraryFilters
+        searching, searchStates, searchMore, coverRevision, allSelected, excluded, seriesTotal, selectedCount, isSelected, toggleChapter, selectPage, selectAll, deselectAll, prepareSelected, chapterAction, authenticated, setupRequired, password, busy, error, message, view, selectedSource, language, group, query, results, detail, chapters, selected, knownGroups, sources, jobs, counts, holds, paused, total, offset, pageSize, librarySearch, sourceFilter, statusFilter, follows, enabledSources, activeCount, remainingCount, sourceGroups, preview, previewLoading, previewError, confirmTranslations, downloadDialog, perform, refresh, login, logout, search, loadChapters, openSeries, prepare, cancelPreview, enqueue, control, groupControl, allControl, deleteDownloads, clearFailed, retrySource, verify, downloadAgain, downloadCover, followSeries, saveFollow, checkFollow, removeFollow, page, applyLibraryFilters
     };
 }
 export type DashboardModel = UnwrapNestedRefs<ReturnType<typeof useDashboard>>;
