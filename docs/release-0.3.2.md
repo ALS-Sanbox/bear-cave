@@ -1,0 +1,14 @@
+# Bear Cave 0.3.2
+
+Search and series browsing no longer wait on unrelated or expensive work:
+
+- All-source search fans out on the server and streams each provider's results or error through one authenticated connection. This avoids both the old three-provider queue and the browser's connection limit. Source pacing, individual 35-second deadlines, retries, pagination, identity and cancellation remain in place.
+- Selecting a result immediately displays its title and available description. Metadata and chapters load independently, with a separate chapter loading message and retry action. Back, a new query, source changes and sign-out cancel obsolete reads. Returning from Queue or History preserves the series view.
+- Reading series metadata no longer fetches every chapter, verifies archives or rewrites library metadata. Lightweight folder-marker lookup still associates cross-source series with existing library records. Downloaded counts come from stored verification; the total is explicitly unknown until the chapter response arrives. Download previews and explicit Verify actions still check saved files.
+- Comix search pages and metadata are cached for two minutes. A sandboxed browser window is reused for subsequent operations, background-throttled while idle and destroyed after one idle minute. A freshly read series document can supply its first complete chapter traversal without a second navigation. Later traversals start at the beginning; new navigations wait for the new document, and cancellation discards the window.
+
+Complete chapter catalogs can still take time on a remote source. They load separately rather than delaying the series heading, and bulk-download previews still validate the complete selection. No universal speed claim or challenge bypass is made. ToonGod remains disabled.
+
+Regression coverage includes streaming partial results, isolated source failures, disconnect cancellation, metadata without catalog reads or archive verification, cache expiry, real-browser reuse, complete pagination, independent chapter loading, retries and stale-response protection. Live Comix cover/timing checks run in an isolated temporary profile via `node scripts/run-electron.mjs scripts/comix-cover-smoke.cjs` after building.
+
+Validation passed: 149 automated tests, typecheck, production build and the seven native Electron checks. The browsing check also holds a manual source retry open until the original search stream completes, ensuring that completion cannot overwrite the retry's state. Live Comix search, series metadata and three PNG thumbnails (including From the Dust) passed. One live run measured 8,817 ms for a first browse, 1,827 ms for first metadata, and less than 1 ms for the immediately repeated cached pair. Those are observations from one run, not general speed guarantees.

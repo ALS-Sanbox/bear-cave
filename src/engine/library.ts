@@ -6,12 +6,13 @@ import sharp from 'sharp';
 import type { Store } from '../core/store.js';
 import type { Chapter, Series, SourceAdapter, Settings } from '../shared/types.js';
 import { seriesDirectory, findSeriesDirectory, checkPath } from './folders.js';
-import { contained, noLink, saveCover, digest } from './files.js';
+import { contained, noLink, saveCover, digest, readSavedCover } from './files.js';
 import { verifyOutput } from './verification.js';
 import { matching } from './selection.js';
 import { verifyArchive, validManifest } from './archive.js';
 // Identity comes from source chapter manifests, never from similar folder titles.
 export async function reconcile(store: Store, series: Series, chapters: Chapter[], settings: Settings, signal?: AbortSignal) {
+    const verified = new Set<string>();
     const dir = await findSeriesDirectory(settings.downloadRoot, series, store);
     const known = new Map(chapters.map(c => [c.id, c]));
     for (const entry of dir ? await readdir(dir, { withFileTypes: true }) : []) {
@@ -68,17 +69,18 @@ export async function reconcile(store: Store, series: Series, chapters: Chapter[
             if (existing?.output && existing.output !== file && path.resolve(existing.root) === path.resolve(settings.downloadRoot) && (await verifyOutput(existing, signal)).state === 'verified')
                 continue;
             const candidate = {
-                ...(existing ?? { root: settings.downloadRoot, chapter }), source: series.source, series, root: settings.downloadRoot, output: file
+                ...(existing ?? { root: settings.downloadRoot, chapter }), external:undefined,source: series.source, series, root: settings.downloadRoot, output: file
             };
-            const verification = await verifyOutput(candidate as import('../shared/types.js').Job, signal);
+            const verification = entry.isDirectory() ? await verifyOutput(candidate as import('../shared/types.js').Job, signal) : {state:'verified' as const,checked:new Date().toISOString()};
             if (verification.state !== 'verified')
                 continue;
             if (existing && store.job(existing.id)?.state !== 'completed')
                 continue;
             const job = existing ?? store.enqueue(series, chapter, settings, { importOutput: true }).job;
             store.update(job.id, {
-                state: 'completed', root: settings.downloadRoot, output: file, format: entry.isDirectory() ? 'folders' : 'cbz', done: manifest.pages.length, total: manifest.pages.length, verification
+                external:undefined,state: 'completed', root: settings.downloadRoot, output: file, format: entry.isDirectory() ? 'folders' : 'cbz', done: manifest.pages.length, total: manifest.pages.length, verification
             });
+            verified.add(job.id);
         }
         catch (e) {
             if (signal?.aborted)
@@ -86,13 +88,15 @@ export async function reconcile(store: Store, series: Series, chapters: Chapter[
         }
     }
     for (const job of new Map([...store.seriesJobs(series.source, series.id), ...store.libraryJobs(series.source, series.id, settings.downloadRoot)].map(j => [j.id, j])).values()) {
-        if (job.state !== 'completed')
+        if (job.state !== 'completed' || verified.has(job.id))
             continue;
         const verification = path.resolve(job.root) === path.resolve(settings.downloadRoot)
             ? await verifyOutput(job, signal) : { state: 'missing' as const, checked: new Date().toISOString() };
         if (store.job(job.id)?.state === 'completed')
             store.update(job.id, { verification });
+        if (verification.state==='verified')verified.add(job.id);
     }
+    return verified;
 }
 export function libraryStatus(store: Store, series: Series, total: number, root?: string) {
     const jobs = store.libraryJobs(series.source, series.id, root);
@@ -107,6 +111,7 @@ const locks = new Map<string, Promise<void>>();
 export async function syncSeries(store: Store, adapter: SourceAdapter, series: Series, root: string, signal?: AbortSignal, total?: number, options: {
     offline?: boolean;
     create?: boolean;
+    coverFormat?: 'png' | 'jpg';
 } = {}) {
     const dir = options.create === false ? await findSeriesDirectory(root, series, store) : await seriesDirectory(root, series, store);
     if (!dir)
@@ -181,12 +186,10 @@ export async function syncSeries(store: Store, adapter: SourceAdapter, series: S
         finally {
             await rm(temp, { force: true });
         }
-        const cover = contained(dir, 'coverart.png');
         try {
-            await noLink(cover);
-            const image = sharp(await readFile(cover));
-            if ((await image.metadata()).format !== 'png')
-                throw Error('Invalid PNG');
+            const bytes = await readSavedCover(dir);
+            if (!bytes) throw Error('Cover unavailable');
+            const image = sharp(bytes);
             await image.stats();
             return;
         }
@@ -200,7 +203,7 @@ export async function syncSeries(store: Store, adapter: SourceAdapter, series: S
         store.set(retryKey, Date.now());
         try {
             if (adapter.cover) {
-                await saveCover(root, series.title, await adapter.cover(series.id, signal, series.coverRef), signal, series, store);
+                await saveCover(root, series.title, await adapter.cover(series.id, signal, series.coverRef), signal, series, store, options.coverFormat ?? 'png');
                 store.set(retryKey, 0);
             }
         }

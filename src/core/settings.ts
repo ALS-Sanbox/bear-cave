@@ -4,7 +4,7 @@ import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import type { Settings } from '../shared/types.js';
 export const settingsSchema = z.object({
-    downloadRoot: z.string().min(3).max(220), format: z.enum(['folders', 'cbz']),
+    downloadRoot: z.string().min(3).max(220), format: z.enum(['folders', 'cbz']), coverFormat: z.enum(['png','jpg']).default('png'),
     globalChapters: z.number().int().min(1).max(8), sourceChapters: z.record(z.string().regex(/^[a-z0-9-]+$/), z.number().int().min(1).max(4)),
     pageRequests: z.number().int().min(1).max(3), port: z.number().int().min(1024).max(65535),
     startWithWindows: z.boolean(), publicUrl: z.string().max(200), trustTunnel: z.boolean()
@@ -24,7 +24,7 @@ export const settingsSchema = z.object({
 }).transform(s => ({ ...s, publicUrl: s.publicUrl ? new URL(s.publicUrl).origin : '' }));
 export function defaults(root: string): Settings {
     return {
-        downloadRoot: root, format: 'cbz', globalChapters: 2, sourceChapters: { mangadex: 1 }, pageRequests: 1, port: 43110, startWithWindows: false, publicUrl: '', trustTunnel: false
+        downloadRoot: root, format: 'cbz', coverFormat: 'png', globalChapters: 2, sourceChapters: { mangadex: 1 }, pageRequests: 1, port: 43110, startWithWindows: false, publicUrl: '', trustTunnel: false
     };
 }
 export async function validateRoot(root: string, forbidden: string[]): Promise<string> {

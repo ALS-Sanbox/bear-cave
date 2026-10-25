@@ -58,6 +58,23 @@ export function useDashboard() {
         loaded: number;
     }[]>([]);
     let searchController: AbortController | undefined, searchedQuery = '';
+    let seriesController: AbortController | undefined, chapterController: AbortController | undefined;
+    let libraryController: AbortController | undefined;
+    const libraryChecking=ref(false),libraryMessage=ref(''),libraryError=ref('');
+    function cancelFolderCheck(){libraryController?.abort();libraryChecking.value=false;}
+    const detailLoading = ref(false), chaptersLoading = ref(false), chaptersError = ref('');
+    function closeSeries() {
+        seriesController?.abort();
+        chapterController?.abort();
+        cancelFolderCheck();libraryMessage.value='';libraryError.value='';
+        detailLoading.value = false;
+        chaptersLoading.value = false;
+        chaptersError.value = '';
+        detail.value = undefined;
+        chapters.value = undefined;
+        preview.value = undefined;
+    }
+    watch([language,group],()=>{cancelFolderCheck();libraryMessage.value='';libraryError.value='';});
     const sources = ref<SourceManifest[]>([]), jobs = ref<Job[]>([]), counts = ref<Record<string, number>>({}), holds = ref<Hold[]>([]), paused = ref(false), total = ref(0), offset = ref(0), pageSize = 100;
     const librarySearch = ref(''), sourceFilter = ref(''), statusFilter = ref(''), follows = ref<FollowedSeries[]>([]);
     const enabledSources = computed(() => sources.value.filter(s => s.status === 'operational')), activeCount = computed(() => counts.value.running ?? 0), remainingCount = computed(() => Object.entries(counts.value).reduce((n, [state, count]) => n + (state === 'completed' ? 0 : count), 0));
@@ -89,6 +106,7 @@ export function useDashboard() {
     }
     restoreFilters();
     watch(selectedSource, () => {
+        closeSeries();
         searchController?.abort();
         searching.value = false;
         searchStates.value = [];
@@ -100,13 +118,14 @@ export function useDashboard() {
         chapters.value = undefined;
         preview.value = undefined;
     });
-    async function api<T>(url: string, body?: unknown, signal?: AbortSignal): Promise<T> {
+    async function request(url: string, body?: unknown, signal?: AbortSignal): Promise<Response> {
         const response = await fetch(`/api/${url}`, {
             method: body === undefined ? 'GET' : 'POST', headers: body === undefined ? {} : { 'Content-Type': 'application/json', 'X-CSRF-Token': csrf.value }, body: body === undefined ? undefined : JSON.stringify(body), signal
         });
-        const data = await response.json();
         if (!response.ok) {
+            const data = await response.json();
             if (response.status === 401 && url !== 'login') {
+                closeSeries();
                 searchController?.abort();
                 searching.value = false;
                 results.value = undefined;
@@ -121,7 +140,10 @@ export function useDashboard() {
             }
             throw Error(data.error ?? 'Request failed.');
         }
-        return data;
+        return response;
+    }
+    async function api<T>(url: string, body?: unknown, signal?: AbortSignal): Promise<T> {
+        return (await request(url, body, signal)).json();
     }
     async function perform(fn: () => Promise<unknown>) {
         if (busy.value)
@@ -181,8 +203,12 @@ export function useDashboard() {
                         if (states[c.localChapterId ?? c.id])
                             local[c.id] = states[c.localChapterId ?? c.id];
                 }
-                if (detail.value)
-                    detail.value.library = await api(`library-status?source=${detail.value.source}&id=${encodeURIComponent(detail.value.id)}&total=${seriesTotal.value}`);
+                const series = detail.value;
+                if (series) {
+                    const library = await api<NonNullable<Series['library']>>(`library-status?source=${series.source}&id=${encodeURIComponent(series.id)}&total=${seriesTotal.value}`);
+                    if (detail.value === series && chapters.value === snapshot)
+                        series.library = library;
+                }
                 if (chapters.value === snapshot)
                     for (const c of snapshot.items)
                         c.localState = local[c.id] ?? 'not_downloaded';
@@ -216,6 +242,7 @@ export function useDashboard() {
         });
     }
     async function logout() {
+        closeSeries();
         await perform(async () => {
             await api('logout', {});
             searchController?.abort();
@@ -228,6 +255,61 @@ export function useDashboard() {
             follows.value = [];
         });
     }
+    function acceptSearchPage(source: string, page: PageResult<Series>, controller: AbortController, append = false) {
+        const state = searchStates.value.find(s => s.id === source);
+        if (!state || controller !== searchController || controller.signal.aborted)
+            return;
+        const previous = selectedSource.value === 'all' || append ? results.value?.items ?? [] : [];
+        const unique = new Map(previous.map(s => [`${s.source}:${s.id}`, s]));
+        page.items.forEach(s => unique.set(`${s.source}:${s.id}`, s));
+        const order = new Map(searchStates.value.map((s, i) => [s.id, i]));
+        const items = [...unique.values()].sort((a, b) => (order.get(a.source) ?? 0) - (order.get(b.source) ?? 0));
+        state.state = 'done';
+        state.offset = page.offset;
+        state.limit = page.limit;
+        state.total = page.total;
+        state.loaded = items.filter(s => s.source === source).length;
+        results.value = {
+            items, totalExact: selectedSource.value === 'all' ? false : page.totalExact, total: selectedSource.value === 'all' ? searchStates.value.reduce((n, s) => n + s.total, 0) : page.total, offset: selectedSource.value === 'all' ? 0 : page.offset, limit: page.limit
+        };
+    }
+    async function searchAll(controller: AbortController) {
+        searchStates.value.forEach(state => { state.state = 'searching'; });
+        const completed = new Set<string>();
+        let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
+        try {
+            const response = await request(`search-all?q=${encodeURIComponent(searchedQuery)}`, undefined, controller.signal);
+            reader = response.body?.getReader();
+            if (!reader) throw Error('Search response was empty. Retry the search.');
+            const decoder = new TextDecoder();
+            let buffer = '';
+            const accept = (line: string) => {
+                if (!line.trim() || controller !== searchController || controller.signal.aborted) return;
+                const event = JSON.parse(line) as { source: string; page?: PageResult<Series>; error?: string };
+                const state = searchStates.value.find(s => s.id === event.source);
+                if (!state) return;
+                completed.add(event.source);
+                if (event.page) acceptSearchPage(event.source, event.page, controller);
+                else { state.state = 'error'; state.retryOffset = 0; state.error = event.error || 'Source search failed. Retry this source.'; }
+            };
+            for (;;) {
+                const part = await reader.read();
+                buffer += decoder.decode(part.value, { stream: !part.done });
+                if (buffer.length > 2 * 1024 * 1024) throw Error('Search response exceeded its size limit.');
+                let end: number;
+                while ((end = buffer.indexOf('\n')) >= 0) { accept(buffer.slice(0, end)); buffer = buffer.slice(end + 1); }
+                if (part.done) { accept(buffer); break; }
+            }
+            if (searchStates.value.some(state => !completed.has(state.id))) throw Error('Search response ended early. Retry unfinished sources.');
+        } catch (e) {
+            if (controller !== searchController || controller.signal.aborted) return;
+            searchStates.value.filter(state => !completed.has(state.id) && ['searching', 'waiting'].includes(state.state)).forEach(state => {
+                state.state = 'error'; state.retryOffset = 0; state.error = (e as Error).message;
+            });
+        } finally {
+            if (reader) { await reader.cancel().catch(() => {}); reader.releaseLock(); }
+        }
+    }
     async function searchPage(source: string, at: number, controller: AbortController, append = false) {
         const state = searchStates.value.find(s => s.id === source);
         if (!state)
@@ -237,21 +319,7 @@ export function useDashboard() {
         const signal = AbortSignal.any([controller.signal, AbortSignal.timeout(35000)]);
         try {
             const page = await api<PageResult<Series>>(`search?source=${source}&q=${encodeURIComponent(searchedQuery)}&offset=${at}`, undefined, signal);
-            if (controller !== searchController || controller.signal.aborted)
-                return;
-            const previous = selectedSource.value === 'all' || append ? results.value?.items ?? [] : [];
-            const unique = new Map(previous.map(s => [`${s.source}:${s.id}`, s]));
-            page.items.forEach(s => unique.set(`${s.source}:${s.id}`, s));
-            const order = new Map(searchStates.value.map((s, i) => [s.id, i]));
-            const items = [...unique.values()].sort((a, b) => (order.get(a.source) ?? 0) - (order.get(b.source) ?? 0));
-            state.state = 'done';
-            state.offset = page.offset;
-            state.limit = page.limit;
-            state.total = page.total;
-            state.loaded = items.filter(s => s.source === source).length;
-            results.value = {
-                items, totalExact: selectedSource.value === 'all' ? false : page.totalExact, total: selectedSource.value === 'all' ? searchStates.value.reduce((n, s) => n + s.total, 0) : page.total, offset: selectedSource.value === 'all' ? 0 : page.offset, limit: page.limit
-            };
+            acceptSearchPage(source, page, controller, append);
         }
         catch (e) {
             if (controller !== searchController || controller.signal.aborted)
@@ -274,7 +342,7 @@ export function useDashboard() {
         message.value = '';
         savePreferences();
         coverRevision.value++;
-        detail.value = undefined;
+        closeSeries();
         searchedQuery = query.value.trim();
         const targets = selectedSource.value === 'all' ? enabledSources.value : enabledSources.value.filter(s => s.id === selectedSource.value);
         searchStates.value = targets.map(s => ({
@@ -283,14 +351,11 @@ export function useDashboard() {
         results.value = {
             items: [], total: 0, offset: at, limit: 50
         };
-        let next = 0;
         try {
-            await Promise.all(Array.from({ length: Math.min(3, targets.length) }, async () => {
-                while (next < targets.length && !controller.signal.aborted) {
-                    const target = targets[next++];
-                    await searchPage(target.id, at, controller);
-                }
-            }));
+            // Each provider has its own pacing and cancellation; a slow provider
+            // must not prevent an unrelated provider from starting its first page.
+            if (selectedSource.value === 'all') await searchAll(controller);
+            else if (targets[0]) await searchPage(targets[0].id, at, controller);
         }
         finally {
             if (searchController === controller)
@@ -336,34 +401,90 @@ export function useDashboard() {
             await loadChapters(chapters.value?.offset ?? 0);
         });
     }
-    async function loadChapters(at = 0) {
+    async function checkFolder(force=true) {
+        if(!detail.value)return;
+        cancelFolderCheck();
+        const controller=new AbortController(),series=detail.value,filter=JSON.stringify([language.value,group.value]);libraryController=controller;
+        const signal=AbortSignal.any([controller.signal,...(seriesController?[seriesController.signal]:[])]);
+        libraryChecking.value=true;libraryError.value='';libraryMessage.value='';
+        try{
+            const result=await api<{folderFound:boolean;completed?:number;imported:number;ambiguous:number;skipped:number}>('library-scan',{source:series.source,seriesId:series.id,language:language.value,group:group.value||undefined,force},signal);
+            if(signal.aborted||libraryController!==controller||filter!==JSON.stringify([language.value,group.value]))return;
+            libraryMessage.value=result.folderFound?`Folder checked: ${result.completed??0} completed chapter(s) recognized.`:'No matching series folder found.';
+            if(result.ambiguous)libraryMessage.value+=' Some files or folders are ambiguous. Choose a translation group or check the folder naming, then recheck.';
+            if(result.skipped)libraryMessage.value+=` ${result.skipped} unsupported or incomplete file(s) left unchanged.`;
+            if(result.imported)libraryMessage.value+=' Numbered external files were matched to the selected language/group.';
+            if(result.folderFound)await loadChapters(chapters.value?.offset??0,false);
+        }catch(e){if(!signal.aborted&&libraryController===controller)libraryError.value=(e as Error).message;}
+        finally{if(libraryController===controller)libraryChecking.value=false;}
+    }
+    async function loadChapters(at = 0, scan=false) {
         if (!detail.value)
             return;
         savePreferences();
-        chapters.value = await api(`chapters?source=${detail.value.source}&id=${encodeURIComponent(detail.value.id)}&language=${encodeURIComponent(language.value)}&group=${encodeURIComponent(group.value)}&offset=${at}`);
-        const merged = new Map(knownGroups.value.map(g => [g.id, g]));
-        chapters.value!.items.flatMap(c => c.groups).forEach(g => merged.set(g.id, g));
-        knownGroups.value = [...merged.values()];
-        preview.value = undefined;
+        chapterController?.abort();
+        const controller = new AbortController(), series = detail.value;
+        chapterController = controller;
+        const signal = AbortSignal.any([controller.signal, ...(seriesController ? [seriesController.signal] : [])]);
+        chaptersLoading.value = true;
+        chaptersError.value = '';
+        try {
+            const page = await api<PageResult<Chapter> & { library?: Series['library'] }>(`chapters?source=${series.source}&id=${encodeURIComponent(series.id)}&language=${encodeURIComponent(language.value)}&group=${encodeURIComponent(group.value)}&offset=${at}`, undefined, signal);
+            if (signal.aborted || chapterController !== controller || detail.value?.source !== series.source || detail.value?.id !== series.id)
+                return;
+            chapters.value = page;
+            seriesTotal.value = page.total;
+            if (page.library)
+                detail.value.library = page.library;
+            const merged = new Map(knownGroups.value.map(g => [g.id, g]));
+            page.items.flatMap(c => c.groups).forEach(g => merged.set(g.id, g));
+            knownGroups.value = [...merged.values()];
+            preview.value = undefined;
+            if(scan)void checkFolder(false);
+        } catch (e) {
+            if (!signal.aborted && chapterController === controller)
+                chaptersError.value = (e as Error).message;
+        } finally {
+            if (chapterController === controller)
+                chaptersLoading.value = false;
+        }
     }
     async function openSeries(series: Series) {
-        await perform(async () => {
-            if (selectedSource.value !== 'all' && selectedSource.value !== series.source) {
-                selectedSource.value = series.source;
-                await Promise.resolve();
+        if (busy.value)
+            return;
+        if (selectedSource.value !== 'all' && selectedSource.value !== series.source) {
+            selectedSource.value = series.source;
+            await Promise.resolve();
+        }
+        closeSeries();
+        const controller = new AbortController();
+        seriesController = controller;
+        detail.value = { ...series };
+        detailLoading.value = true;
+        error.value = '';
+        restoreFilters(series.source);
+        deselectAll();
+        seriesTotal.value = 0;
+        knownGroups.value = [];
+        const metadata = (async () => {
+            try {
+                const result = await api<Series>(`series?source=${series.source}&id=${encodeURIComponent(series.id)}`, undefined, controller.signal);
+                if (seriesController === controller && !controller.signal.aborted && detail.value)
+                    detail.value = { ...result, library: detail.value.library ?? result.library };
+            } catch (e) {
+                if (seriesController === controller && !controller.signal.aborted)
+                    error.value = (e as Error).message;
+            } finally {
+                if (seriesController === controller)
+                    detailLoading.value = false;
             }
-            detail.value = await api(`series?source=${series.source}&id=${encodeURIComponent(series.id)}`);
-            restoreFilters(series.source);
-            deselectAll();
-            seriesTotal.value = detail.value!.library?.total ?? 0;
-            knownGroups.value = [];
-            chapters.value = undefined;
-            await loadChapters();
-        });
+        })();
+        await Promise.all([metadata, loadChapters(0,true)]);
     }
     async function prepare(ids?: string[], followId?: string, all = false) {
         if (busy.value || !detail.value && !followId)
             return;
+        cancelFolderCheck();
         const controller = new AbortController();
         previewController = controller;
         preview.value = undefined;
@@ -497,13 +618,16 @@ export function useDashboard() {
         });
     }
     const coverRevision = ref(0);
+    const coverFormat = ref<'default'|'png'|'jpg'>('default');
+    try { const saved=localStorage.getItem('bear-cave-cover-format');if(saved==='png'||saved==='jpg')coverFormat.value=saved; } catch { /* Use local settings by default. */ }
+    watch(coverFormat,value=>{try{localStorage.setItem('bear-cave-cover-format',value);}catch{/* Preferences are optional. */}});
     async function downloadCover() {
         if (!detail.value)
             return;
         await perform(async () => {
-            await api('cover', { source: detail.value!.source, id: detail.value!.id });
+            const result = await api<{filename:string}>('cover', { source: detail.value!.source, id: detail.value!.id, format:coverFormat.value==='default'?undefined:coverFormat.value });
             coverRevision.value++;
-            message.value = 'Saved coverart.png in the series download folder.';
+            message.value = `Saved ${result.filename} in the series download folder.`;
         });
     }
     async function followSeries() {
@@ -606,6 +730,7 @@ export function useDashboard() {
         poll();
     });
     onUnmounted(() => {
+        closeSeries();
         searchController?.abort();
         stopped = true;
         if (timer)
@@ -614,6 +739,9 @@ export function useDashboard() {
         document.removeEventListener('visibilitychange', visibility);
     });
     return {
+        checkFolder,cancelFolderCheck,libraryChecking,libraryMessage,libraryError,
+        coverFormat,
+        closeSeries, detailLoading, chaptersLoading, chaptersError,
         searching, searchStates, searchMore, coverRevision, allSelected, excluded, seriesTotal, selectedCount, isSelected, toggleChapter, selectPage, selectAll, deselectAll, prepareSelected, chapterAction, authenticated, setupRequired, password, busy, error, message, view, selectedSource, language, group, query, results, detail, chapters, selected, knownGroups, sources, jobs, counts, holds, paused, total, offset, pageSize, librarySearch, sourceFilter, statusFilter, follows, enabledSources, activeCount, remainingCount, sourceGroups, preview, previewLoading, previewError, confirmTranslations, downloadDialog, perform, refresh, login, logout, search, loadChapters, openSeries, prepare, cancelPreview, enqueue, control, groupControl, allControl, deleteDownloads, clearFailed, retrySource, verify, downloadAgain, downloadCover, followSeries, saveFollow, checkFollow, removeFollow, page, applyLibraryFilters
     };
 }

@@ -21,6 +21,10 @@ export class Comix extends WebsiteSource {
         return load(await this.browser.render(url, mode, signal));
     }
     async search(query: string, offset = 0, signal?: AbortSignal) {
+        signal?.throwIfAborted();
+        return this.cached(`search:${query}:${offset}`, () => this.searchPage(query, offset, signal));
+    }
+    private async searchPage(query: string, offset: number, signal?: AbortSignal) {
         const limit = 28, page = Math.floor(offset / limit) + 1;
         const $ = await this.rendered(`https://comix.to/browse?keyword=${encodeURIComponent(query)}&page=${page}`, 'browse', signal);
         const found = new Map<string, Series>();
@@ -41,6 +45,10 @@ export class Comix extends WebsiteSource {
         };
     }
     async series(id: string, signal?: AbortSignal): Promise<Series> {
+        signal?.throwIfAborted();
+        return this.cached(`series:${id}`, () => this.seriesPage(id, signal));
+    }
+    private async seriesPage(id: string, signal?: AbortSignal): Promise<Series> {
         const url = this.url(id), $ = await this.rendered(url, 'series', signal);
         let data: any;
         try {

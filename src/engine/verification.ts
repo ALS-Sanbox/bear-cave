@@ -5,6 +5,7 @@ import { digest, noLink, contained, imageExtension } from './files.js';
 import { checkPath, seriesDirectory } from './folders.js';
 import type { Job } from '../shared/types.js';
 import type { Store } from '../core/store.js';
+import { inspectExternalOutput } from './external-library.js';
 export async function verifyOutput(job: Job, signal?: AbortSignal): Promise<NonNullable<Job['verification']>> {
     let state: NonNullable<Job['verification']>['state'] = 'verified';
     try {
@@ -22,6 +23,11 @@ export async function verifyOutput(job: Job, signal?: AbortSignal): Promise<NonN
             if ((e as NodeJS.ErrnoException).code === 'ENOENT')
                 return { state: 'missing', checked: new Date().toISOString() };
             throw e;
+        }
+        if(job.external){
+            const actual=await inspectExternalOutput(root,job.output,signal);
+            if(actual.kind!==job.external.kind||actual.pages!==job.external.pages||actual.signature!==job.external.signature)throw Error('Imported chapter changed');
+            return{state:'verified',checked:new Date().toISOString()};
         }
         let m: Manifest;
         if (info.isDirectory()) {
@@ -80,6 +86,6 @@ export async function redownload(store: Store, id: string, mode: 'missing' | 'co
     if (store.job(id)?.state !== 'completed')
         throw Error('Chapter is already queued.');
     return store.update(id, {
-        replacement: mode === 'replace' && job.output ? { original: job.output, suffix: job.copySuffix } : undefined, state: 'queued', seriesFolder, done: 0, error: null, output: null, verification: undefined, copySuffix: mode !== 'missing' ? ` [copy ${Date.now()}]` : job.copySuffix, previousOutputs: [...(job.previousOutputs ?? []), ...(job.output && verification.state !== 'missing' ? [job.output] : [])]
+        external:undefined,replacement: mode === 'replace' && job.output ? { original: job.output, suffix: job.copySuffix } : undefined, state: 'queued', seriesFolder, done: 0, error: null, output: null, verification: undefined, copySuffix: mode !== 'missing' ? ` [copy ${Date.now()}]` : job.copySuffix, previousOutputs: [...(job.previousOutputs ?? []), ...(job.output && verification.state !== 'missing' ? [job.output] : [])]
     });
 }

@@ -110,7 +110,7 @@ export class Queue {
                     completedAt: new Date().toISOString(), verification: { state: 'verified', checked: new Date().toISOString() }, state: 'completed', done: this.store.job(job.id)!.total, output, error: null
                 });
             if (!this.worker)
-                await syncSeries(this.store, this.registry.get(job.source), job.series, job.root).catch(e => console.warn('Series metadata:', (e as Error).message));
+                await syncSeries(this.store, this.registry.get(job.source), job.series, job.root, undefined, undefined, {coverFormat:this.settings().coverFormat}).catch(e => console.warn('Series metadata:', (e as Error).message));
         }
         catch (e) {
             if (signal.aborted)
@@ -130,7 +130,7 @@ export class Queue {
     }
     private async download(job: Job, signal: AbortSignal): Promise<string> {
         const adapter = this.registry.get(job.source);
-        await syncSeries(this.store, adapter, job.series, job.root, signal).catch(e => console.warn('Series metadata:', (e as Error).message));
+        await syncSeries(this.store, adapter, job.series, job.root, signal, undefined, {coverFormat:this.settings().coverFormat}).catch(e => console.warn('Series metadata:', (e as Error).message));
         let resolved = await adapter.resolve(job.chapter.id, signal);
         const output = new ChapterOutput(job, this.store);
         await output.open(resolved.revision, resolved.urls.length, resolved.identities);

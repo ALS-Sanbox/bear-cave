@@ -58,6 +58,10 @@ app.whenReady().then(async()=>{
   await js('Array.from(document.querySelectorAll("button")).find(b=>b.textContent==="Download cover art").click()');
   await until(()=>fs.existsSync(path.join(settings.downloadRoot,series.title,'coverart.png')),'cover saved beside chapters');
   await until(()=>js('!document.querySelector(".series-heading button").disabled'),'cover action complete');
+  await js(`(()=>{const select=document.querySelector('select[aria-label="Cover art format"]');select.value='jpg';select.dispatchEvent(new Event('change',{bubbles:true}));Array.from(document.querySelectorAll('button')).find(b=>b.textContent==='Download cover art').click()})()`);
+  await until(()=>fs.existsSync(path.join(settings.downloadRoot,series.title,'coverart.jpg')),'JPG cover saved');
+  assert.equal((await require('sharp')(fs.readFileSync(path.join(settings.downloadRoot,series.title,'coverart.jpg'))).metadata()).format,'jpeg');
+  await until(()=>js('!document.querySelector(".series-heading button").disabled'),'JPG action complete');
   await until(()=>js('document.querySelector(".series-heading .series-cover").complete&&document.querySelector(".series-heading .series-cover").naturalWidth>0'),'series cover rendered');assert((await js('document.querySelector(".series-heading .series-cover").currentSrc')).includes('/api/cover-image?'));
   coverOffline=true;window.setSize(390,844);await delay(200);
   await js('const cover=document.querySelector(".series-heading .series-cover");cover.src=cover.src+"&saved-cover-check=1"');
@@ -92,6 +96,11 @@ app.whenReady().then(async()=>{
   // Exercise real Retry and Clear failed controls, including a paused engine.
   const retryJob=store.enqueue(series,chapters[1],settings).job;store.update(retryJob.id,{state:'failed',error:'Fixture failure'});queue.pauseAll();
   await until(()=>js('Array.from(document.querySelectorAll(".job button")).some(b=>b.textContent==="Retry")'),'retry button');
+  await js('document.querySelector(".series-group summary").click()');await until(()=>js('!document.querySelector(".series-group").open&&!document.querySelector(".series-group .job")'),'series collapsed');
+  await delay(2700);assert.equal(await js('document.querySelector(".series-group").open'),false,'polling preserves collapsed state');
+  await js('Array.from(document.querySelectorAll("nav button")).find(b=>b.textContent.includes("History")).click()');await js('Array.from(document.querySelectorAll("nav button")).find(b=>b.textContent.includes("Download queue")).click()');
+  await until(()=>js('!!document.querySelector(".series-group")'),'queue restored');assert.equal(await js('document.querySelector(".series-group").open'),false,'collapsed state survives navigation');
+  await js('Array.from(document.querySelectorAll("button")).find(b=>b.textContent==="Expand all").click()');await until(()=>js('document.querySelector(".series-group").open&&!!document.querySelector(".series-group .job")'),'series expanded');
   await js('Array.from(document.querySelectorAll(".job button")).find(b=>b.textContent==="Retry").click()');
   await until(()=>store.job(retryJob.id)?.state==='completed','retry while paused completes chapter');
   const failed=store.enqueue(series,chapters[2],settings).job;store.update(failed.id,{state:'failed',error:'Fixture failure'});

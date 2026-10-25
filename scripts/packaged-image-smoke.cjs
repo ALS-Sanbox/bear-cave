@@ -2,18 +2,23 @@
 const assert=require('node:assert/strict');
 const path=require('node:path');
 const {pathToFileURL}=require('node:url');
-const root=path.resolve('release/win-unpacked/resources/app.asar');
+const root=path.resolve(process.argv[2]||'release/win-unpacked/resources/app.asar');
 const sharp=require(path.join(root,'node_modules/sharp'));
 async function run(){
-  assert.equal(require(path.join(root,'package.json')).version,'0.3.0');
+  const version=require(path.resolve('package.json')).version;
+  assert.equal(require(path.join(root,'package.json')).version,version);
   const [{Store},archive]=await Promise.all([
     import(pathToFileURL(path.join(root,'dist/main/core/store.js')).href),
     import(pathToFileURL(path.join(root,'dist/main/engine/archive.js')).href)
   ]);
-  const store=new Store(':memory:');try{assert.equal(store.db.prepare('PRAGMA user_version').get().user_version,2);}finally{store.close();}
+  const store=new Store(':memory:');try{assert.equal(store.db.prepare('PRAGMA user_version').get().user_version,3);}finally{store.close();}
   assert.equal(typeof archive.createArchive,'function');assert.equal(typeof archive.verifyArchive,'function');
+  assert.equal(typeof archive.inspectExternalArchive,'function');
+  const external=await import(pathToFileURL(path.join(root,'dist/main/engine/external-library.js')).href);
+  assert.equal(typeof external.reconcileExternal,'function');
   const jpeg=await sharp({create:{width:2,height:3,channels:3,background:'#a7470b'}}).jpeg().toBuffer();
   const png=await sharp(jpeg).png().toBuffer();assert.equal((await sharp(png).metadata()).format,'png');
-  console.log('Packaged smoke passed: version 0.3.0, SQLite schema 2, streaming archive modules and shipped JPEG-to-PNG converter.');
+  assert.equal((await sharp(png).jpeg().toBuffer().then(bytes=>sharp(bytes).metadata())).format,'jpeg');
+  console.log(`Packaged smoke passed: version ${version}, SQLite schema 3, native/external archive modules and shipped PNG/JPG converters.`);
 }
 run().catch(error=>{console.error(error);process.exitCode=1;});

@@ -348,7 +348,7 @@ export class InstalledBrowser {
             const length = Number(headers.find(h => h.name.toLowerCase() === 'content-length')?.value ?? 0);
             if (length > 32 * 1024 * 1024)
                 throw new SourceError('Source image exceeds the size limit.');
-            if (status !== 200 || !/^image\/(jpeg|png|webp)(?:;|$)/i.test(type)) {
+            if (status !== 200 || !/^image\/(jpe?g|png|webp)(?:\s*;|$)/i.test(type.trim())) {
                 await this.imageCall('Fetch.failRequest', { requestId: event.requestId, errorReason: 'Aborted' });
                 waiter.reject(new SourceError('ToonGod image access failed in the source browser. Check its window and retry.', [401, 403].includes(status) || /text\/html/i.test(type) ? 'action_required' : 'transient'));
                 return;

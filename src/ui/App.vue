@@ -56,9 +56,10 @@ const headings = {
         <div v-if="d.setupRequired" class="notice">Open Settings from the local Bear Cave tray menu to create the administrator password.</div>
         <p class="hint">Use the administrator password saved in Bear Cave tray Settings. If forgotten, set a new administrator password there and Save.</p>
         <form @submit.prevent="d.login">
+          <input type="hidden" name="username" autocomplete="username" value="administrator">
           <label>
             Administrator password
-            <input v-model="d.password" type="password" autocomplete="current-password" required maxlength="256">
+            <input v-model="d.password" type="password" name="password" autocomplete="current-password" required maxlength="256">
           </label>
           <button class="primary" :disabled="d.busy||d.setupRequired">Sign in</button>
         </form>

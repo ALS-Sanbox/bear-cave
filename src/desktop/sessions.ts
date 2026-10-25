@@ -7,6 +7,8 @@ import { validateUrl } from '../sources/http.js';
 export class BrowserSessions {
     private renders = new Set<BrowserWindow>();
     private rendering = new Set<string>();
+    private renderWindows = new Map<string, { window: BrowserWindow; mode: RenderMode; idle?: ReturnType<typeof setTimeout> }>();
+    private stopped = new AbortController();
     private dynamicImages = new Map<string, string[]>();
     private guarded = new Map<string, Set<string>>();
     constructor(private checkHost: (url: URL) => Promise<void> = assertPublicHost) {
@@ -56,18 +58,42 @@ export class BrowserSessions {
         validateUrl(url, ['comix.to']);
         if (source !== 'comix')
             throw Error('Unsupported rendered source.');
+        const combined = AbortSignal.any([this.stopped.signal, ...(signal ? [signal] : [])]);
         while (this.rendering.has(source))
-            await delay(100, undefined, { signal });
-        signal?.throwIfAborted();
+            await delay(25, undefined, { signal: combined });
+        combined.throwIfAborted();
         this.rendering.add(source);
         this.dynamicImages.set(source, hosts);
+        const previous = this.renderWindows.get(source);
+        if (previous?.idle)
+            clearTimeout(previous.idle);
+        const existing = previous && !previous.window.isDestroyed() ? previous.window : undefined;
+        existing?.webContents.setBackgroundThrottling(false);
+        // Only reuse a series document for its first complete chapter traversal.
+        // A completed traversal is on its last page and must be navigated afresh.
+        const reuseDocument = !!existing && previous?.mode === 'series' && mode === 'chapters' && existing.webContents.getURL() === url;
         try {
-            return await renderSource(this.prepare(source, [...hosts, 'challenges.cloudflare.com']), url, mode, signal, window => {
+            return await renderSource(this.prepare(source, [...hosts, 'challenges.cloudflare.com']), url, mode, combined, window => {
                 this.renders.add(window);
-                window.on('closed', () => this.renders.delete(window));
-            });
+                this.renderWindows.set(source, { window, mode });
+                window.on('closed', () => {
+                    this.renders.delete(window);
+                    const entry = this.renderWindows.get(source);
+                    if (entry?.window === window) {
+                        if (entry.idle) clearTimeout(entry.idle);
+                        this.renderWindows.delete(source);
+                    }
+                });
+            }, existing, reuseDocument);
         }
         finally {
+            const entry = this.renderWindows.get(source);
+            if (entry && !entry.window.isDestroyed()) {
+                entry.mode = mode;
+                entry.window.webContents.setBackgroundThrottling(true);
+                entry.idle = setTimeout(() => { if (!entry.window.isDestroyed()) entry.window.destroy(); }, 60000);
+                entry.idle.unref();
+            }
             this.rendering.delete(source);
         }
     }
@@ -103,6 +129,9 @@ export class BrowserSessions {
         await window.loadURL(account.loginUrl);
     }
     close() {
+        this.stopped.abort();
+        for (const entry of this.renderWindows.values())
+            if (entry.idle) clearTimeout(entry.idle);
         for (const w of this.renders)
             w.destroy();
         for (const w of this.windows.values())

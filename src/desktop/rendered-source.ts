@@ -3,15 +3,16 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { SourceError } from '../shared/types.js';
 export type RenderMode = 'browse' | 'series' | 'chapters' | 'reader';
 // Reads ordinary rendered site content. A challenge stops the request for local human interaction.
-export async function renderSource(partition: Session, url: string, mode: RenderMode, signal: AbortSignal | undefined, register: (window: BrowserWindow) => void) {
+export async function renderSource(partition: Session, url: string, mode: RenderMode, signal: AbortSignal | undefined, register: (window: BrowserWindow) => void, existing?: BrowserWindow, reuseDocument = false) {
     const deadline = AbortSignal.any([AbortSignal.timeout(mode === 'browse' ? 30000 : 180000), ...(signal ? [signal] : [])]);
     deadline.throwIfAborted();
-    const window = new BrowserWindow({
+    const window = existing ?? new BrowserWindow({
         show: false, width: 1100, height: 900, webPreferences: {
             session: partition, sandbox: true, contextIsolation: true, nodeIntegration: false, backgroundThrottling: false
         }
     });
-    register(window);
+    if (!existing)
+        register(window);
     window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
     const stop = () => {
         if (!window.isDestroyed())
@@ -19,14 +20,21 @@ export async function renderSource(partition: Session, url: string, mode: Render
     };
     deadline.addEventListener('abort', stop, { once: true });
     let navigationError: Error | undefined;
-    void window.loadURL(url).catch(e => {
-        if (!window.isDestroyed() && e.code !== 'ERR_ABORTED')
-            navigationError = e;
-    });
+    let committed = reuseDocument;
+    const navigated = () => { committed = true; };
+    if (!reuseDocument)
+        window.webContents.once('did-navigate', navigated);
+    if (!reuseDocument)
+        void window.loadURL(url).catch(e => {
+            if (!window.isDestroyed() && e.code !== 'ERR_ABORTED')
+                navigationError = e;
+        });
     async function evaluate<T>(script: string): Promise<T> {
         deadline.throwIfAborted();
         if (navigationError)
             throw new SourceError('Comix browser navigation failed. Open its local source window and retry.', 'action_required');
+        if (!committed)
+            throw Error('Waiting for the new source document.');
         return window.webContents.executeJavaScript(script, true);
     }
     async function wait<T>(script: string, ms = 30000): Promise<T> {
@@ -115,8 +123,13 @@ export async function renderSource(partition: Session, url: string, mode: Render
             throw new SourceError('Comix page exceeds the size limit.');
         return html;
     }
+    catch (e) {
+        stop();
+        throw e;
+    }
     finally {
         deadline.removeEventListener('abort', stop);
-        stop();
+        if (!window.isDestroyed())
+            window.webContents.removeListener('did-navigate', navigated);
     }
 }

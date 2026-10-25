@@ -99,7 +99,7 @@ export class SessionHttp {
                 throw new SourceError('Source is temporarily unavailable.', 'transient');
             if (response.status !== 200)
                 throw new SourceError(`Source returned HTTP ${response.status}.`);
-            if (image && !/^image\/(jpeg|png|webp)/i.test(type))
+            if (image && !/^image\/(jpe?g|png|webp)(?:\s*;|$)/i.test(type.trim()))
                 throw new SourceError('Source did not return a supported image.');
             return bytes;
         }

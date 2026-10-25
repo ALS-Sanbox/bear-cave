@@ -95,7 +95,7 @@ export class Store {
             const job = JSON.parse(String(existing.data)) as Job;
             if (job.state === 'completed' && job.verification?.state === 'missing')
                 return { job: this.update(job.id, {
-                        state: 'queued', root: settings.downloadRoot, output: null, done: 0, verification: undefined, seriesFolder: undefined
+                        state: 'queued', root: settings.downloadRoot, output: null, done: 0, verification: undefined, external:undefined,seriesFolder: undefined
                     }), duplicate: false };
             return { job, duplicate: true };
         }

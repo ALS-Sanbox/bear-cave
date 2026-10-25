@@ -1,5 +1,7 @@
-import { readdir } from 'node:fs/promises';
-import { describe,it,expect } from 'vitest';
+import { readdir, mkdir, writeFile, readFile } from 'node:fs/promises';
+import { zipSync } from 'fflate';
+import sharp from 'sharp';
+import { describe,it,expect,vi } from 'vitest';
 import path from 'node:path';
 import { request as httpRequest } from 'node:http';
 import { Store } from '../src/core/store.js';
@@ -7,17 +9,82 @@ import { Queue } from '../src/engine/queue.js';
 import { Registry } from '../src/sources/registry.js';
 import { createDashboard } from '../src/server/server.js';
 import { hashPassword,verifyPassword } from '../src/server/auth.js';
+import { SourceError } from '../src/shared/types.js';
 import { workspace,chapter,adapter } from './helpers.js';
-async function harness(count = 2) {
-  const w=await workspace(),store=new Store(':memory:');const ch=chapter();const registry=new Registry([adapter(count === 2 ? [ch,{...chapter(),number:ch.number}] : Array.from({length:count},(_,i)=>chapter({number:String(i+1)})))]);
+async function harness(count = 2, adapters?: ReturnType<typeof adapter>[]) {
+  const w=await workspace(),store=new Store(':memory:');const ch=chapter();const registry=new Registry(adapters??[adapter(count === 2 ? [ch,{...chapter(),number:ch.number}] : Array.from({length:count},(_,i)=>chapter({number:String(i+1)})))]);
   const queue=new Queue(store,registry,()=>w.settings);store.set('queue-paused',true);store.set('admin-hash',await hashPassword('correct horse battery staple'));
   const dashboard=createDashboard(store,queue,registry,()=>w.settings,path.resolve('dist/ui'));const port=await dashboard.listen(0),origin=`http://127.0.0.1:${port}`;
   let cookie='',csrf='';
   async function request(route:string,body?:unknown,extra:Record<string,string>={}):Promise<Response> {return new Promise((resolve,reject)=>{const req=httpRequest(origin+route,{method:body===undefined?'GET':'POST',headers:{...(body===undefined?{}:{'Content-Type':'application/json',Origin:origin,'X-CSRF-Token':csrf}),Cookie:cookie,...extra}},res=>{const parts:Buffer[]=[];res.on('data',p=>parts.push(p));res.on('end',()=>{const headers=new Headers();for(const [key,value]of Object.entries(res.headers))if(value!==undefined)headers.set(key,Array.isArray(value)?value.join(', '):value);resolve(new Response(Buffer.concat(parts),{status:res.statusCode,headers}));});res.on('error',reject);});req.on('error',reject);req.end(body===undefined?undefined:JSON.stringify(body));});}
   async function login(extra:Record<string,string>={}){const r=await request('/api/login',{password:'correct horse battery staple'},extra);cookie=r.headers.get('set-cookie')?.split(';')[0]??'';csrf=(await r.json()).csrf;return r;}
-  return {w,store,queue,dashboard,origin,request,login,cleanup:async()=>{await dashboard.close();await queue.stop();store.close();await w.cleanup();}};
+  return {w,store,queue,registry,dashboard,origin,request,login,cleanup:async()=>{await dashboard.close();await queue.stop();store.close();await w.cleanup();}};
 }
 describe('dashboard security and queue API',()=> {
+  it('checks an external ZIP folder and reports completed chapters without rewriting files',async()=>{
+    const h=await harness(1);try{
+      await h.login();const source=h.registry.get('mangadex'),series=await source.series('11111111-1111-4111-8111-111111111111');
+      const page=await source.chapters(series.id,{language:'en'},0),dir=path.join(h.w.dir,series.title);await mkdir(dir);
+      const png=await sharp({create:{width:3,height:4,channels:3,background:'#a7470b'}}).png().toBuffer(),bytes=Buffer.from(zipSync({'1/001.png':png,'1/002.png':png})),file=path.join(dir,'Manga - 1.zip');await writeFile(file,bytes);
+      const scan=await h.request('/api/library-scan',{source:'mangadex',seriesId:series.id,language:'en'});expect(scan.status).toBe(200);expect(await scan.json()).toMatchObject({folderFound:true,imported:1,completed:1});
+      const current=await(await h.request(`/api/chapters?source=mangadex&id=${series.id}`)).json();expect(current.items[0].localState).toBe('completed');expect(current.items[0].localJobId).toBeTruthy();
+      expect(await readdir(dir)).toEqual(['Manga - 1.zip']);
+      const preview=await(await h.request('/api/preview',{source:'mangadex',seriesId:series.id,language:'en',ids:[page.items[0].id]})).json();expect(preview.count).toBe(0);expect(preview.completed).toBe(1);
+      expect(await readFile(file)).toEqual(bytes);
+      expect((await h.request('/api/library-scan',{source:'mangadex',seriesId:series.id,language:'en',folder:'../outside'})).status).toBe(400);
+    }finally{await h.cleanup();}
+  });
+  it('uses the configured JPG cover default and permits an explicit PNG override',async()=>{
+    const h=await harness(1);try{
+      await h.login();h.w.settings.coverFormat='jpg';const source=h.registry.get('mangadex');source.cover=async()=>sharp({create:{width:3,height:4,channels:3,background:'#a7470b'}}).png().toBuffer();
+      const series=await source.series('11111111-1111-4111-8111-111111111111');
+      expect(await(await h.request('/api/cover',{source:'mangadex',id:series.id})).json()).toMatchObject({filename:'coverart.jpg'});
+      expect((await sharp(await readFile(path.join(h.w.dir,series.title,'coverart.jpg'))).metadata()).format).toBe('jpeg');
+      expect(await(await h.request('/api/cover',{source:'mangadex',id:series.id,format:'png'})).json()).toMatchObject({filename:'coverart.png'});
+      expect((await sharp(await readFile(path.join(h.w.dir,series.title,'coverart.png'))).metadata()).format).toBe('png');
+      expect((await h.request('/api/cover',{source:'mangadex',id:series.id,format:'svg'})).status).toBe(400);
+    }finally{await h.cleanup();}
+  });
+  it('streams fast source results and isolated errors before slow sources finish, and cancels on disconnect',async()=>{
+    let cancelled=false;
+    const fast=adapter(),slow=adapter(),broken=adapter();
+    const search=fast.search;
+    fast.search=async(...args)=>{const page=await search(...args);return{...page,items:page.items.map(s=>({...s,coverRef:'https://private-fixture.example/cover.jpg'}))};};
+    slow.manifest={...slow.manifest,id:'slowfixture',name:'Slow'};
+    slow.search=async(_query,_offset,signal)=>new Promise((_resolve,reject)=>{signal!.addEventListener('abort',()=>{cancelled=true;reject(signal!.reason)},{once:true});});
+    broken.manifest={...broken.manifest,id:'brokenfixture',name:'Broken'};
+    broken.search=async()=>{throw new SourceError('Fixture source unavailable','action_required');};
+    const h=await harness(2,[fast,slow,broken]),controller=new AbortController();
+    try{
+      expect((await h.request('/api/search-all?q=fixture')).status).toBe(401);
+      await h.login();
+      const session=h.dashboard.auth.sessions.values().next().value!;
+      const response=await fetch(h.origin+'/api/search-all?q=fixture',{headers:{Cookie:`bc_session=${session.id}`},signal:controller.signal});
+      expect(response.headers.get('content-type')).toContain('application/x-ndjson');
+      const reader=response.body!.getReader(),decoder=new TextDecoder();let text='';
+      while(text.trim().split('\n').length<2)text+=decoder.decode((await reader.read()).value,{stream:true});
+      const events=text.trim().split('\n').map(line=>JSON.parse(line));
+      expect(events.find(e=>e.source==='mangadex').page.items[0].coverRef).toBeUndefined();
+      expect(events.find(e=>e.source==='brokenfixture').error).toBe('Fixture source unavailable');
+      expect(events.some(e=>e.source==='slowfixture')).toBe(false);
+      controller.abort();await reader.cancel().catch(()=>{});
+      await vi.waitFor(()=>expect(cancelled).toBe(true));
+      expect((await h.request('/api/search-all?q=')).status).toBe(400);
+    }finally{controller.abort();await h.cleanup();}
+  });
+  it('returns series metadata without loading chapters or changing saved verification',async()=>{
+    const h=await harness();try{
+      await h.login();const source=h.registry.get('mangadex');
+      const chapters=vi.spyOn(source,'chapters').mockRejectedValue(Error('Catalog is slow or unavailable'));
+      const c=chapter(),series=await source.series(c.seriesId);
+      const job=h.store.enqueue(series,c,h.w.settings).job;
+      h.store.update(job.id,{state:'completed',output:path.join(h.w.dir,'missing.cbz'),verification:{state:'verified',checked:new Date().toISOString()}});
+      const result=await h.request(`/api/series?source=mangadex&id=${series.id}`);
+      expect(result.status).toBe(200);expect((await result.json()).title).toBe(series.title);
+      expect(chapters).not.toHaveBeenCalled();expect(h.store.job(job.id)?.verification?.state).toBe('verified');
+      expect(await readdir(h.w.dir)).toEqual([]);
+    }finally{await h.cleanup();}
+  });
   it('verifies saved history after its source has been removed',async()=>{const h=await harness();try{
     await h.login();const c=chapter({source:'toongod'}),j=h.store.enqueue({id:c.seriesId,source:c.source,title:'Removed source fixture',description:''},c,h.w.settings).job;
     h.store.update(j.id,{state:'completed',output:path.join(h.w.dir,'missing.cbz')});

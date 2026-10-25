@@ -7,6 +7,8 @@ import type { Store } from '../core/store.js';
 import sharp from 'sharp';
 import { randomUUID } from 'node:crypto';
 import type { Job, Series } from '../shared/types.js';
+import { imageExtension } from './image-types.js';
+export { imageExtension } from './image-types.js';
 export function safeName(value: string, max = 55): string {
     let s = value.normalize('NFKC').replace(/[<>:"/\\|?*\x00-\x1f\x7f]/g, '_').replace(/[. ]+$/g, '').trim();
     if (!s || s === '.' || s === '..')
@@ -36,19 +38,35 @@ export async function noLink(file: string) {
 export function digest(data: Uint8Array): string {
     return createHash('sha256').update(data).digest('hex');
 }
-export async function saveCover(root: string, title: string, bytes: Uint8Array, signal?: AbortSignal, series?: Series, store?: Store) {
+export async function readSavedCover(dir: string) {
+    await noLink(dir);
+    const candidates: { file: string; modified: number }[] = [];
+    for (const name of ['coverart.png','coverart.jpg','coverart.jpeg']) {
+        const file = contained(dir,name);
+        try { const info=await lstat(file); if(info.isFile()&&!info.isSymbolicLink()&&info.size<=MAX_PAGE_BYTES) candidates.push({file,modified:info.mtimeMs}); } catch { /* Try the other supported filenames. */ }
+    }
+    for (const candidate of candidates.sort((a,b)=>b.modified-a.modified)) {
+        try {
+            await noLink(candidate.file);
+            const bytes=await readFile(candidate.file),format=imageExtension(bytes);
+            if (format === (candidate.file.endsWith('.png')?'png':'jpg')) return bytes;
+        } catch { /* A corrupt cover must not hide another valid local cover. */ }
+    }
+}
+export async function saveCover(root: string, title: string, bytes: Uint8Array, signal?: AbortSignal, series?: Series, store?: Store, format: 'png' | 'jpg' = 'png') {
     if (bytes.byteLength > MAX_PAGE_BYTES)
         throw Error('Cover exceeds image size limit');
     imageExtension(bytes);
     const dir = series ? await seriesDirectory(root, series, store) : contained(await realpath(root), safeName(title, 65));
     await noLink(dir);
     await mkdir(dir, { recursive: true });
-    const file = contained(dir, 'coverart.png'), temp = contained(dir, `.coverart-${randomUUID()}.part`);
+    const file = contained(dir, `coverart.${format}`), temp = contained(dir, `.coverart-${randomUUID()}.part`);
     await noLink(file);
-    const png = await sharp(Buffer.from(bytes), { limitInputPixels: 40000000 }).rotate().png().toBuffer();
+    const image = sharp(Buffer.from(bytes), { limitInputPixels: 40000000 }).rotate();
+    const encoded = await (format === 'jpg' ? image.flatten({ background: '#ffffff' }).jpeg({ quality: 92 }) : image.png()).toBuffer();
     signal?.throwIfAborted();
     try {
-        await writeFile(temp, png, { flag: 'wx' });
+        await writeFile(temp, encoded, { flag: 'wx' });
         signal?.throwIfAborted();
         await noLink(file);
         await rename(temp, file);
@@ -63,16 +81,6 @@ export function chapterNumber(value: string): string {
 }
 function fileId(value: string) {
     return /^[a-f0-9-]{36}$/i.test(value) ? value.toLowerCase() : digest(Buffer.from(value)).slice(0, 32);
-}
-export function imageExtension(data: Uint8Array): string {
-    const b = Buffer.from(data);
-    if (b.length >= 12 && b.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10])) && b.subarray(-8, -4).toString() === 'IEND')
-        return 'png';
-    if (b.length >= 4 && b[0] === 255 && b[1] === 216 && b[b.length - 2] === 255 && b[b.length - 1] === 217)
-        return 'jpg';
-    if (b.length >= 16 && b.toString('ascii', 0, 4) === 'RIFF' && b.toString('ascii', 8, 12) === 'WEBP' && b.readUInt32LE(4) + 8 === b.length)
-        return 'webp';
-    throw Error('Downloaded page is not a complete PNG, JPEG or WebP image.');
 }
 export class ChapterOutput {
     private dir = '';

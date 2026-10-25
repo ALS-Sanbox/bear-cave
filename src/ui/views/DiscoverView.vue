@@ -21,21 +21,29 @@ const languages = languageOptions;
     <button class="primary" :disabled="model.busy">Search</button>
   </form>
   <template v-if="model.detail">
-    <button class="subtle back" @click="model.detail=undefined;model.preview=undefined">Back to results</button>
+    <button class="subtle back" @click="model.closeSeries()">Back to results</button>
     <div class="series-heading card">
       <CoverImage :source="model.detail.source" :id="model.detail.id" :title="model.detail.title" :revision="model.coverRevision" eager/>
       <div>
         <p class="eyebrow">{{model.detail.source}}</p>
         <h2>{{model.detail.title}}</h2>
-        <p v-if="model.detail.library" role="status">{{model.detail.library.state}} ? {{model.detail.library.downloaded}} / {{model.detail.library.total}} Chapters Downloaded</p>
-        <p class="description">{{model.detail.description||'No description available.'}}</p>
+        <p v-if="model.detail.library?.totalKnown===false" role="status">{{model.detail.library.downloaded}} Chapters Downloaded · {{model.chaptersError?'Chapter count unavailable':'Loading chapter count...'}}</p>
+        <p v-else-if="model.detail.library" role="status">{{model.detail.library.state}} ? {{model.detail.library.downloaded}} / {{model.detail.library.total}} Chapters Downloaded</p>
+        <p v-if="model.detailLoading" role="status">Loading series details...</p>
+        <p class="description">{{model.detail.description||(model.detailLoading?'':'No description available.')}}</p>
         <div class="inline">
+          <select v-model="model.coverFormat" aria-label="Cover art format">
+            <option value="default">Cover format from local settings</option>
+            <option value="png">PNG</option>
+            <option value="jpg">JPG</option>
+          </select>
           <button :disabled="model.busy" @click="model.downloadCover">Download cover art</button>
+          <button :disabled="model.libraryChecking||model.busy" @click="model.checkFolder()">Recheck series folder</button>
           <button :disabled="model.busy" @click="model.followSeries">{{following?'Unfollow series':'Follow series'}}</button>
         </div>
       </div>
     </div>
-    <form v-if="['mangadex','comix'].includes(model.detail.source)" class="filters card" @submit.prevent="model.perform(()=>model.loadChapters(0))">
+    <form v-if="['mangadex','comix'].includes(model.detail.source)" class="filters card" @submit.prevent="model.loadChapters(0,true)">
       <label>
         Language
         <select v-model="model.language" :disabled="model.detail.source==='comix'">
@@ -55,13 +63,22 @@ const languages = languageOptions;
       <p class="hint">Group choices appear as chapter pages are loaded. Preferences are remembered per source.</p>
     </form>
     <p v-else class="notice">English public chapters. This source does not support language or translation-group selection.</p>
+    <p v-if="model.chaptersLoading" class="notice" role="status">Loading chapters...</p>
+    <div v-if="model.libraryChecking" class="notice" role="status">Checking the series folder for completed chapters... <button @click="model.cancelFolderCheck()">Stop folder check</button></div>
+    <p v-if="model.libraryMessage" class="notice" role="status">{{model.libraryMessage}}</p>
+    <p v-if="model.libraryError" class="notice" role="alert">Folder check: {{model.libraryError}}</p>
+    <p class="hint">Folder checks recognize Bear Cave files and numbered CBZ/ZIP files or image folders. Ambiguous translations are left unchanged.</p>
+    <div v-if="model.chaptersError" class="notice" role="alert">
+      {{model.chaptersError}}
+      <button :disabled="model.chaptersLoading" @click="model.loadChapters(model.chapters?.offset??0,true)">Retry chapters</button>
+    </div>
     <div v-if="model.chapters" class="card chapters">
       <div class="section-bar">
         <h2>{{model.chapters.total.toLocaleString()}} matching chapters</h2>
         <div class="inline">
-          <button :disabled="!model.selectedCount||model.busy" @click="model.prepareSelected()">Download selected ({{model.selectedCount}})</button>
-          <button :disabled="model.busy" @click="model.selectAll()">Select All {{model.seriesTotal}} Chapters</button>
-          <button @click="model.selectPage()">Select This Page</button>
+          <button :disabled="!model.selectedCount||model.busy||model.chaptersLoading" @click="model.prepareSelected()">Download selected ({{model.selectedCount}})</button>
+          <button :disabled="model.busy||model.chaptersLoading" @click="model.selectAll()">Select All {{model.seriesTotal}} Chapters</button>
+          <button :disabled="model.chaptersLoading" @click="model.selectPage()">Select This Page</button>
           <button @click="model.deselectAll()">Deselect All</button>
         </div>
       </div>
@@ -111,9 +128,9 @@ const languages = languageOptions;
         </table>
       </div>
       <div class="pagination">
-        <button :disabled="model.busy||!model.chapters.offset" @click="model.perform(()=>model.loadChapters(Math.max(0,model.chapters!.offset-model.chapters!.limit)))">Previous</button>
+        <button :disabled="model.busy||model.chaptersLoading||!model.chapters.offset" @click="model.loadChapters(Math.max(0,model.chapters!.offset-model.chapters!.limit))">Previous</button>
         <span>{{model.chapters.offset+1}}–{{Math.min(model.chapters.offset+model.chapters.limit,model.chapters.total)}} of {{model.chapters.total}}</span>
-        <button :disabled="model.busy||model.chapters.offset+model.chapters.limit>=model.chapters.total||model.chapters.offset+model.chapters.limit*2>10000" @click="model.perform(()=>model.loadChapters(model.chapters!.offset+model.chapters!.limit))">Next</button>
+        <button :disabled="model.busy||model.chaptersLoading||model.chapters.offset+model.chapters.limit>=model.chapters.total||model.chapters.offset+model.chapters.limit*2>10000" @click="model.loadChapters(model.chapters!.offset+model.chapters!.limit)">Next</button>
       </div>
     </div>
   </template>

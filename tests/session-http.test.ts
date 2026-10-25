@@ -4,6 +4,17 @@ const hosts=['www.toongod.org','toongod.org'];
 const guard=async()=>{};
 const response=(body:string,status=200,headers:Record<string,string>={})=>new Response(body,{status,headers:{'Content-Type':'text/html',...headers}});
 describe('source Chromium session transport',()=>{
+ it('accepts the image/jpg JPEG alias used by Comix and rejects unsupported MIME lookalikes',async()=>{
+    for(const type of ['image/jpg','image/jpeg','image/JPG; charset=binary']) {
+      const bytes=Buffer.from([255,216,255,224]);
+      const http=new SessionHttp(async()=>new Response(bytes,{headers:{'Content-Type':type}}),guard,0);
+      expect(await http.get('https://www.toongod.org/cover.jpg',hosts,undefined,true)).toEqual(bytes);
+    }
+    for(const type of ['image/jpg-script','image/png+xml','image/svg+xml']) {
+      const http=new SessionHttp(async()=>response('not a supported image',200,{'Content-Type':type}),guard,0);
+      await expect(http.get('https://www.toongod.org/cover.jpg',hosts,undefined,true)).rejects.toThrow('supported image');
+    }
+ });
  it('uses session credentials and the genuine browser user agent, without exporting or forging cookies',async()=>{
     let init:RequestInit|undefined;
     const http=new SessionHttp(async(_url,options)=>{init=options;return response('<h1>Public result</h1>');},guard,0);

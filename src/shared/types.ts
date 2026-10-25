@@ -11,6 +11,7 @@ export interface Series {
         state: string;
         downloaded: number;
         total: number;
+        totalKnown?: boolean;
     };
 }
 export interface Chapter {
@@ -71,11 +72,13 @@ export interface Job {
         checked: string;
     };
     previousOutputs?: string[];
+    external?: { kind: 'archive' | 'folder'; signature: string; pages: number; comicInfo?: {series?:string;number?:string;volume?:string;language?:string} };
 }
 export interface Settings {
     downloadRoot: string;
     format: 'folders' | 'cbz';
     globalChapters: number;
+    coverFormat?: 'png' | 'jpg';
     sourceChapters: Record<string, number>;
     pageRequests: number;
     port: number;

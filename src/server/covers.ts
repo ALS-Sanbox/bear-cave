@@ -5,7 +5,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { readFile, lstat, realpath } from 'node:fs/promises';
 import type { Store } from '../core/store.js';
 import { checkPath, markerHasIdentity } from '../engine/folders.js';
-import { contained, digest, imageExtension } from '../engine/files.js';
+import { contained, digest, imageExtension, readSavedCover } from '../engine/files.js';
 // Read only identity-mapped library files; browsing a cover must not create folders.
 export async function readLibraryCover(store: Store, root: string, source: string, id: string) {
     try {
@@ -23,12 +23,7 @@ export async function readLibraryCover(store: Store, root: string, source: strin
         // Read-only cross-source lookups may map an alias before a download adds it to the marker.
         if (!markerHasIdentity(owner, `${source}:${id}`) && (typeof owner?.identity !== 'string' || store.folder(root, owner.identity) !== folder))
             return;
-        const file = contained(dir, 'coverart.png');
-        await checkPath(root, file);
-        const info = await lstat(file);
-        if (!info.isFile() || info.size > 32 * 1024 * 1024)
-            return;
-        return await readFile(file);
+        return await readSavedCover(dir);
     }
     catch {
         return;

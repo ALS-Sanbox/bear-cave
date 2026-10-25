@@ -162,7 +162,7 @@ export class SafeHttp {
             throw new SourceError('Source is temporarily unavailable.', 'transient');
         if (status !== 200)
             throw new SourceError(`Source returned HTTP ${status}.`);
-        if (image && !/^image\/(jpeg|png|webp)/i.test(String(headers['content-type'])))
+        if (image && !/^image\/(jpe?g|png|webp)(?:\s*;|$)/i.test(String(headers['content-type']).trim()))
             throw new SourceError('Source did not return a supported image.');
         return body;
     }

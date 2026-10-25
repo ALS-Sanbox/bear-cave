@@ -1,0 +1,31 @@
+import { afterEach, expect, it, vi } from 'vitest';
+import { Comix } from '../src/sources/comix.js';
+import { encodePath } from '../src/sources/website.js';
+afterEach(() => vi.useRealTimers());
+const browse = '<a href="/title/abcd-fixture"><img src="https://static.comix.to/cover.jpg" alt="Fixture"></a>';
+const series = '<h1 class="mpage__title">Fixture</h1>';
+it('caches Comix search pages and metadata briefly without mixing queries or offsets', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    const render = vi.fn(async (_url: string, mode: string) => mode === 'browse' ? browse : series);
+    const source = new Comix({ render });
+    await source.search('fixture'); await source.search('fixture');
+    expect(render).toHaveBeenCalledTimes(1);
+    await source.search('other'); await source.search('fixture',28);
+    expect(render).toHaveBeenCalledTimes(3);
+    const id=encodePath('/title/abcd-fixture');
+    await source.series(id); await source.series(id);
+    expect(render).toHaveBeenCalledTimes(4);
+    vi.setSystemTime(Date.now()+121000);
+    await source.series(id); await source.search('fixture');
+    expect(render).toHaveBeenCalledTimes(6);
+});
+it('does not cache failed renders and respects cancellation for cached reads', async () => {
+    const render = vi.fn(async () => browse);
+    render.mockRejectedValueOnce(Error('Temporary failure'));
+    const source = new Comix({ render });
+    await expect(source.search('fixture')).rejects.toThrow('Temporary failure');
+    await expect(source.search('fixture')).resolves.toMatchObject({total:1});
+    const controller=new AbortController();controller.abort();
+    await expect(source.search('fixture',0,controller.signal)).rejects.toThrow();
+    expect(render).toHaveBeenCalledTimes(2);
+});

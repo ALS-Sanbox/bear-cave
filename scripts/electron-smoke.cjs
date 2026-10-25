@@ -54,7 +54,7 @@ app.whenReady().then(async()=>{
   assert((await remote.webContents.executeJavaScript('document.body.innerText')).includes('Sign in'));
   assert.equal(await remote.webContents.executeJavaScript('typeof window.bearCaveLocal'),'undefined');
   assert.equal(await remote.webContents.executeJavaScript(`fetch('/favicon.ico').then(async r=>r.status===200&&r.headers.get('content-type')==='image/x-icon'&&(await r.arrayBuffer()).byteLength>0)`),true);
-  await remote.webContents.executeJavaScript(`(()=>{const input=document.querySelector('.login input');input.value='wrong password';input.dispatchEvent(new Event('input',{bubbles:true}));document.querySelector('.login form').requestSubmit();})()`);
+  await remote.webContents.executeJavaScript(`(()=>{const input=document.querySelector('.login input[type=password]');input.value='wrong password';input.dispatchEvent(new Event('input',{bubbles:true}));document.querySelector('.login form').requestSubmit();})()`);
   await new Promise(r=>setTimeout(r,600));
   assert((await remote.webContents.executeJavaScript('document.querySelector("[role=alert]").textContent')).includes('Bear Cave tray Settings'));
   const login=await remote.webContents.executeJavaScript(`fetch('/api/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({password:'temporary integration password'})}).then(r=>r.status)`);

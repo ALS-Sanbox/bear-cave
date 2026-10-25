@@ -106,8 +106,8 @@ it('reports shared downloads through HTTP previews, chapter statuses and follow 
     store.set('admin-hash',await hashPassword('cross source fixture password'));const session=await dashboard.auth.login('cross source fixture password');
     const port=await dashboard.listen(0),origin=`http://127.0.0.1:${port}`;
     async function request(route:string,body?:unknown){const response=await fetch(origin+'/api/'+route,{method:body===undefined?'GET':'POST',headers:{Cookie:`bc_session=${session.id}`,Origin:origin,'X-CSRF-Token':session.csrf,'Content-Type':'application/json'},body:body===undefined?undefined:JSON.stringify(body)});expect(response.status).toBe(200);return response.json();}
-    const detail=await request(`series?source=asura&id=${b.id}`);expect(detail.library.downloaded).toBe(2);expect(detail.library.total).toBe(3);
-    const page=await request(`chapters?source=asura&id=${b.id}`);expect(page.items[0].localState).toBe('completed');expect(page.items[0].localSource).toBe(a.source);
+    const detail=await request(`series?source=asura&id=${b.id}`);expect(detail.library.downloaded).toBe(2);expect(detail.library.totalKnown).toBe(false);
+    const page=await request(`chapters?source=asura&id=${b.id}`);expect(page.library.total).toBe(3);expect(page.library.downloaded).toBe(2);expect(page.items[0].localState).toBe('completed');expect(page.items[0].localSource).toBe(a.source);
     const followed=dashboard.follows.save(b,{language:'en'});expect((await dashboard.follows.check(followed.id)).summary.count).toBe(1);
     const preview=await request('preview',{source:b.source,seriesId:b.id,language:'en',all:true});expect(preview.completed).toBe(2);expect(preview.count).toBe(1);
     store.set('queue-paused',true);expect((await request('enqueue',{token:preview.token,confirmTranslations:true})).added).toBe(1);

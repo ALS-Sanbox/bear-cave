@@ -8,6 +8,16 @@ import { Store } from '../src/core/store.js';
 import { Registry } from '../src/sources/registry.js';
 import { workspace, series, adapter } from './helpers.js';
 async function image(color: string) { return sharp({create:{width:20,height:30,channels:3,background:color}}).png().toBuffer(); }
+it('saves real JPEG covers and serves them offline while retaining existing PNG artwork',async()=>{
+ const w=await workspace(),store=new Store(':memory:');try{
+  const original=await saveCover(w.dir,series.title,await image('red'),undefined,series,store);
+  const jpg=await saveCover(w.dir,series.title,await image('blue'),undefined,series,store,'jpg');
+  expect(path.basename(jpg)).toBe('coverart.jpg');expect((await sharp(await readFile(jpg)).metadata()).format).toBe('jpeg');expect(await readFile(original)).toBeTruthy();
+  expect(await readLibraryCover(store,w.dir,series.source,series.id)).toEqual(await readFile(jpg));
+  const cache=new CoverCache(new Registry([adapter()]),(s,id)=>readLibraryCover(store,w.dir,s,id));
+  try{expect((await sharp(await cache.get(series.source,series.id)).metadata()).format).toBe('png');}finally{await cache.stop();}
+ }finally{store.close();await w.cleanup();}
+});
 it('serves a saved cover offline, including after a cached source failure, and sees refreshed covers',async()=>{
     const w=await workspace(),store=new Store(':memory:'),source=adapter();let calls=0;
     source.cover=async()=>{calls++;throw Error('source offline');};

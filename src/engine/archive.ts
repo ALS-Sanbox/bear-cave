@@ -5,6 +5,8 @@ import { createHash } from 'node:crypto';
 import { createInflateRaw } from 'node:zlib';
 import { Zip, ZipPassThrough } from 'fflate';
 import path from 'node:path';
+import { validateExternalImage } from './image-types.js';
+import type { Job } from '../shared/types.js';
 export const MAX_PAGE_BYTES = 32 * 1024 * 1024, MAX_PAGES = 2000, MAX_ARCHIVE_BYTES = 0xffff0000;
 export interface PageRecord {
     name: string;
@@ -95,6 +97,12 @@ export async function createArchive(file: string, dir: string, manifest: Manifes
 }
 // Read the bounded central directory, then stream each entry separately (stored or legacy deflated ZIP).
 export async function verifyArchive(file: string, expected?: Manifest, signal?: AbortSignal): Promise<Manifest> {
+    return await inspectArchive(file, expected, signal, false) as Manifest;
+}
+export async function inspectExternalArchive(file: string, signal?: AbortSignal) {
+    return await inspectArchive(file, undefined, signal, true) as NonNullable<Job['external']>;
+}
+async function inspectArchive(file: string, expected: Manifest | undefined, signal: AbortSignal | undefined, external: boolean): Promise<Manifest | NonNullable<Job['external']>> {
     const handle = await open(file, 'r');
     try {
         const size = (await handle.stat()).size;
@@ -111,7 +119,7 @@ export async function verifyArchive(file: string, expected?: Manifest, signal?: 
         if (end < 0 || tail.readUInt16LE(end + 4) || tail.readUInt16LE(end + 6))
             throw Error('Invalid ZIP directory');
         const count = tail.readUInt16LE(end + 10), length = tail.readUInt32LE(end + 12), offset = tail.readUInt32LE(end + 16);
-        if (count < 2 || count > MAX_PAGES + 1 || length > 1024 * 1024 || offset + length !== size - tail.length + end)
+        if (count < (external?1:2) || count > (external?MAX_PAGES*2+2:MAX_PAGES+1) || length > 1024 * 1024 || offset + length !== size - tail.length + end)
             throw Error('Invalid ZIP entry limits');
         const directory = Buffer.alloc(length);
         await handle.read(directory, 0, length, offset);
@@ -129,7 +137,10 @@ export async function verifyArchive(file: string, expected?: Manifest, signal?: 
             if (cursor + 46 > length || directory.readUInt32LE(cursor) !== 0x02014b50)
                 throw Error('Invalid ZIP entry');
             const n = directory.readUInt16LE(cursor + 28), extra = directory.readUInt16LE(cursor + 30), comment = directory.readUInt16LE(cursor + 32), name = directory.toString('utf8', cursor + 46, cursor + 46 + n), flags = directory.readUInt16LE(cursor + 8), method = directory.readUInt16LE(cursor + 10), entrySize = directory.readUInt32LE(cursor + 24);
-            if (flags & 1 || ![0, 8].includes(method) || directory.readUInt32LE(cursor + 20) > MAX_PAGE_BYTES + 1024 * 1024 || (!/^\d{5}\.(png|jpg|webp)$/.test(name) && name !== 'bear-cave.json') || entries.some(e => e.name === name) || entrySize > (name === 'bear-cave.json' ? 1024 * 1024 : MAX_PAGE_BYTES))
+            const externalName = name.length <= 512 && !/[\\\x00-\x1f:]/.test(name) && !name.startsWith('/') && name.split('/').filter(Boolean).every(p=>p!=='.'&&p!=='..') && name.split('/').length<=8 && (name.endsWith('/') || /\.(png|jpe?g|webp)$/i.test(name) || /(?:^|\/)ComicInfo\.xml$/i.test(name));
+            const mode=(directory.readUInt32LE(cursor+38)>>>16)&0xf000;
+            if(![0,0x8000,0x4000].includes(mode)||(external&&((mode===0x4000&&!name.endsWith('/'))||(name.endsWith('/')&&entrySize!==0))))throw Error('Unsupported archive entry type');
+            if (flags & 1 || ![0, 8].includes(method) || directory.readUInt32LE(cursor + 20) > MAX_PAGE_BYTES + 1024 * 1024 || (external?!externalName:(!/^\d{5}\.(png|jpg|webp)$/.test(name) && name !== 'bear-cave.json')) || entries.some(e => e.name.toLowerCase() === name.toLowerCase()) || entrySize > (name === 'bear-cave.json' ? 1024 * 1024 : MAX_PAGE_BYTES) || (/ComicInfo\.xml$/i.test(name)&&entrySize>65536))
                 throw Error('Unsafe archive entry');
             entries.push({
                 name, method, packed: directory.readUInt32LE(cursor + 20), size: entrySize, offset: directory.readUInt32LE(cursor + 42), crc: directory.readUInt32LE(cursor + 16)
@@ -138,6 +149,12 @@ export async function verifyArchive(file: string, expected?: Manifest, signal?: 
         }
         if (cursor !== length)
             throw Error('Invalid ZIP directory length');
+        if (external && entries.reduce((n,e)=>n+e.size,0)>MAX_ARCHIVE_BYTES)throw Error('External chapter expansion exceeds limit');
+        if (!external && !entries.some(e=>e.name==='bear-cave.json')) throw Error('Archive has no Bear Cave manifest');
+        const externalDigest=createHash('sha256');let externalPages=0;
+        let comicInfo: NonNullable<Job['external']>['comicInfo'];
+        const imageRoots=new Set<string>();
+        if (external) entries.sort((a,b)=>a.offset-b.offset);
         const results = new Map<string, {
             hash: string;
             size: number;
@@ -158,8 +175,9 @@ export async function verifyArchive(file: string, expected?: Manifest, signal?: 
                 throw Error('ZIP filenames disagree');
             const start = e.offset + 30 + nameLength + extra;
             previousEnd = start + e.packed;
-            if (previousEnd > offset || !e.packed)
+            if (previousEnd > offset || (!e.packed && !(external&&e.name.endsWith('/')&&e.size===0)))
                 throw Error('Invalid ZIP entry range');
+            if (external&&e.name.endsWith('/')) continue;
             const input = createReadStream(file, {
                 start, end: previousEnd - 1, highWaterMark: 64 * 1024, signal
             });
@@ -176,7 +194,7 @@ export async function verifyArchive(file: string, expected?: Manifest, signal?: 
                         throw Error('Archive expansion exceeds limit');
                     hash.update(chunk);
                     crc = crcUpdate(crc, chunk);
-                    if (e.name === 'bear-cave.json')
+                    if (e.name === 'bear-cave.json' || external)
                         chunks.push(chunk);
                 }
             }
@@ -188,10 +206,17 @@ export async function verifyArchive(file: string, expected?: Manifest, signal?: 
             }
             if (bytes !== e.size || ((crc ^ 0xffffffff) >>> 0) !== e.crc)
                 throw Error('Archive CRC or length mismatch');
+            if (external) {
+                if (/\.(png|jpe?g|webp)$/i.test(e.name)) { imageRoots.add(e.name.includes('/')?e.name.split('/')[0]:'');if(imageRoots.size>1)throw Error('External archive has multiple image roots');await validateExternalImage(Buffer.concat(chunks),signal); if(++externalPages>MAX_PAGES)throw Error('Too many external pages'); }
+                else if (/ComicInfo\.xml$/i.test(e.name)) comicInfo = parseComicInfo(Buffer.concat(chunks).toString('utf8'));
+                externalDigest.update(JSON.stringify([e.name,bytes,hash.digest('hex')]));
+                continue;
+            }
             results.set(e.name, {
                 hash: hash.digest('hex'), size: bytes, bytes: chunks.length ? Buffer.concat(chunks) : undefined
             });
         }
+        if (external) { if(!externalPages)throw Error('No complete chapter images');return{kind:'archive',signature:externalDigest.digest('hex'),pages:externalPages,comicInfo}; }
         const m = validManifest(JSON.parse(results.get('bear-cave.json')?.bytes?.toString() ?? 'null'));
         if (entries.length !== m.pages.length + 1 || entries.slice(0, -1).some((e, i) => e.name !== m.pages[i]!.name) || entries.at(-1)!.name !== 'bear-cave.json')
             throw Error('Archive entries do not match manifest order');
@@ -207,6 +232,10 @@ export async function verifyArchive(file: string, expected?: Manifest, signal?: 
     finally {
         await handle.close();
     }
+}
+export function parseComicInfo(xml: string): NonNullable<Job['external']>['comicInfo'] {
+    const value=(tag:string)=>xml.match(new RegExp(`<${tag}>\\s*([^<]{0,300})\\s*</${tag}>`,'i'))?.[1]?.trim().replace(/&amp;/g,'&').replace(/&apos;/g,"'").replace(/&quot;/g,'"');
+    return {series:value('Series'),number:value('Number'),volume:value('Volume'),language:value('LanguageISO')};
 }
 const crcTable = Uint32Array.from({ length: 256 }, (_, n) => {
     for (let k = 0; k < 8; k++)

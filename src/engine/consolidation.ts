@@ -61,7 +61,7 @@ async function plan(store: Store, root: string, from: string, to: string, marker
             for (const child of await readdir(file))
                 await add(contained(file, child), contained(to, '.bear-cave', child));
         }
-        else if (['.bear-cave-series.json', 'metadata.json', 'coverart.png'].includes(entry) && (entry === '.bear-cave-series.json' || await exists(contained(to, entry)))) {
+        else if (['.bear-cave-series.json', 'metadata.json', 'coverart.png', 'coverart.jpg', 'coverart.jpeg'].includes(entry) && (entry === '.bear-cave-series.json' || await exists(contained(to, entry)))) {
             await add(file, contained(to, '.bear-cave', 'imports', `${tag}-${entry.replace(/^\./, '')}`));
         }
         else

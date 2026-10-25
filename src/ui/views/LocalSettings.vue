@@ -137,6 +137,13 @@ onMounted(() => {
   </label>
   <div class="form-grid">
     <label>
+      Saved cover format
+      <select v-model="config.coverFormat">
+        <option value="png">PNG (coverart.png)</option>
+        <option value="jpg">JPG (coverart.jpg)</option>
+      </select>
+    </label>
+    <label>
       Active chapters · global
       <input v-model.number="config.globalChapters" type="number" min="1" max="8" required>
     </label>
