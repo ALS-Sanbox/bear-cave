@@ -13,7 +13,7 @@ export class Webtoon extends WebsiteSource {
                         return;
                     const id = encodePath(this.path(href));
                     found.set(id, {
-                        id, source: 'webtoon', title, description: '', coverRef: this.coverReference(a.find('img').attr('data-src') || a.find('img').attr('src'))
+                        id, source: 'webtoon', title, url: this.url(id), metadata: { authors: $('.author').toArray().map(e => $(e).text().trim()), genres: $('.genre').toArray().map(e => $(e).text().trim()) }, description: '', coverRef: this.coverReference(a.find('img').attr('data-src') || a.find('img').attr('src'))
                     });
                 });
             }, $ => $('.paginate a[href*="keyword="],a[rel="next"]').toArray().map(e => $(e).attr('href')!), signal);
@@ -26,7 +26,7 @@ export class Webtoon extends WebsiteSource {
         if (!title)
             throw new SourceError('WEBTOON series layout changed.');
         return {
-            id, source: 'webtoon', title, description: $('.summary').first().text().trim() || $('meta[property="og:description"]').attr('content') || ''
+            id, source: 'webtoon', title, url: this.url(id), metadata: { authors: $('.author').toArray().map(e => $(e).text().trim()), genres: $('.genre').toArray().map(e => $(e).text().trim()) }, description: $('.summary').first().text().trim() || $('meta[property="og:description"]').attr('content') || ''
         };
     }
     async chapters(id: string, filter: ChapterFilter, offset = 0, signal?: AbortSignal) {

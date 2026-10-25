@@ -153,6 +153,8 @@ export function useDashboard() {
             if (chapters.value && detail.value && view.value === 'search') {
                 const snapshot = chapters.value;
                 const local = await api<Record<string, string>>('chapter-status', { source: detail.value.source, ids: snapshot.items.map(c => c.id) });
+                if (detail.value)
+                    detail.value.library = await api(`library-status?source=${detail.value.source}&id=${encodeURIComponent(detail.value.id)}&total=${seriesTotal.value}`);
                 if (chapters.value === snapshot)
                     for (const c of snapshot.items)
                         c.localState = local[c.id] ?? 'not_downloaded';
@@ -204,6 +206,39 @@ export function useDashboard() {
             detail.value = undefined;
         });
     }
+    const allSelected = ref(false), excluded = ref<string[]>([]), seriesTotal = ref(0);
+    const selectedCount = computed(() => allSelected.value ? Math.max(0, seriesTotal.value - excluded.value.length) : selected.value.length);
+    function isSelected(id: string) {
+        return allSelected.value ? !excluded.value.includes(id) : selected.value.includes(id);
+    }
+    function toggleChapter(id: string, checked: boolean) {
+        const target = allSelected.value ? excluded : selected;
+        target.value = target.value.filter(x => x !== id);
+        if (allSelected.value ? !checked : checked)
+            target.value.push(id);
+    }
+    function selectPage(checked = true) {
+        chapters.value?.items.forEach(c => toggleChapter(c.id, checked));
+    }
+    function selectAll() {
+        allSelected.value = true;
+        excluded.value = [];
+        selected.value = [];
+    }
+    function deselectAll() {
+        allSelected.value = false;
+        excluded.value = [];
+        selected.value = [];
+    }
+    async function prepareSelected() {
+        await prepare(allSelected.value ? undefined : selected.value, undefined, allSelected.value);
+    }
+    async function chapterAction(id: string, action: 'verify' | 'redownload') {
+        await perform(async () => {
+            await api(`jobs/${action}`, action === 'verify' ? { id } : { id, mode: 'replace' });
+            await loadChapters(chapters.value?.offset ?? 0);
+        });
+    }
     async function loadChapters(at = 0) {
         if (!detail.value)
             return;
@@ -212,7 +247,6 @@ export function useDashboard() {
         const merged = new Map(knownGroups.value.map(g => [g.id, g]));
         chapters.value!.items.flatMap(c => c.groups).forEach(g => merged.set(g.id, g));
         knownGroups.value = [...merged.values()];
-        selected.value = [];
         preview.value = undefined;
     }
     async function openSeries(series: Series) {
@@ -222,12 +256,14 @@ export function useDashboard() {
                 await Promise.resolve();
             }
             detail.value = await api(`series?source=${series.source}&id=${encodeURIComponent(series.id)}`);
+            deselectAll();
+            seriesTotal.value = detail.value!.library?.total ?? 0;
             knownGroups.value = [];
             chapters.value = undefined;
             await loadChapters();
         });
     }
-    async function prepare(ids?: string[], followId?: string) {
+    async function prepare(ids?: string[], followId?: string, all = false) {
         if (busy.value || !detail.value && !followId)
             return;
         const controller = new AbortController();
@@ -240,7 +276,7 @@ export function useDashboard() {
         downloadDialog.value?.showModal();
         try {
             preview.value = followId ? await api(`follows/${followId}/preview`, {}, controller.signal) : await api('preview', {
-                source: detail.value!.source, seriesId: detail.value!.id, language: language.value, group: group.value || undefined, ids
+                source: detail.value!.source, seriesId: detail.value!.id, language: language.value, group: all ? undefined : group.value || undefined, ids, all, exclude: all ? excluded.value : undefined
             }, controller.signal);
         }
         catch (e) {
@@ -354,11 +390,11 @@ export function useDashboard() {
     }
     async function downloadAgain(job: Job) {
         const missing = job.verification?.state === 'missing';
-        if (!missing && !window.confirm('Keep the existing file and download a separate copy? The existing output will not be replaced.'))
+        if (!missing && !window.confirm('Re-download and replace this chapter after the new files pass verification?'))
             return;
         await perform(async () => {
-            await api('jobs/redownload', { id: job.id, mode: missing ? 'missing' : 'copy' });
-            message.value = 'Chapter queued again. Existing saved files were kept.';
+            await api('jobs/redownload', { id: job.id, mode: missing ? 'missing' : 'replace' });
+            message.value = 'Chapter queued again. Existing files stay available until the verified replacement is ready.';
             await refresh();
         });
     }
@@ -477,7 +513,7 @@ export function useDashboard() {
         document.removeEventListener('visibilitychange', visibility);
     });
     return {
-        authenticated, setupRequired, password, busy, error, message, view, selectedSource, language, group, query, results, detail, chapters, selected, knownGroups, sources, jobs, counts, holds, paused, total, offset, pageSize, librarySearch, sourceFilter, statusFilter, follows, enabledSources, activeCount, remainingCount, sourceGroups, preview, previewLoading, previewError, confirmTranslations, downloadDialog, perform, refresh, login, logout, search, loadChapters, openSeries, prepare, cancelPreview, enqueue, control, groupControl, allControl, deleteDownloads, clearFailed, retrySource, verify, downloadAgain, downloadCover, followSeries, saveFollow, checkFollow, removeFollow, page, applyLibraryFilters
+        allSelected, excluded, seriesTotal, selectedCount, isSelected, toggleChapter, selectPage, selectAll, deselectAll, prepareSelected, chapterAction, authenticated, setupRequired, password, busy, error, message, view, selectedSource, language, group, query, results, detail, chapters, selected, knownGroups, sources, jobs, counts, holds, paused, total, offset, pageSize, librarySearch, sourceFilter, statusFilter, follows, enabledSources, activeCount, remainingCount, sourceGroups, preview, previewLoading, previewError, confirmTranslations, downloadDialog, perform, refresh, login, logout, search, loadChapters, openSeries, prepare, cancelPreview, enqueue, control, groupControl, allControl, deleteDownloads, clearFailed, retrySource, verify, downloadAgain, downloadCover, followSeries, saveFollow, checkFollow, removeFollow, page, applyLibraryFilters
     };
 }
 export type DashboardModel = UnwrapNestedRefs<ReturnType<typeof useDashboard>>;

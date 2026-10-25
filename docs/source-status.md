@@ -19,7 +19,7 @@ The supplied text logo is used for dashboard/login branding. The supplied mark g
 
 Current verification is recorded in [the 0.3.0 release record](verification-0.3.0.md). Historical live checks in the table above are dated October 20, 2026; this coordinated release uses deterministic fixtures and does not claim new live-reader or real-account validation. Native checks use isolated temporary app data.
 
-All adapters share streaming output/recovery, paginated library status, guarded previews and source holds. Search/detail covers use a controlled authenticated cache with mark fallback; full cover downloads remain explicit. MangaDex supplies content hashes/filenames. Asura/Flame immutable image paths can distinguish transport signing fields from image identity. Unknown schemes remain conservative and retain meaningful query information in hashed identities.
+All adapters share streaming output/recovery, paginated library status, guarded previews and source holds. Search/detail covers use a controlled authenticated cache with mark fallback; full covers are now saved automatically with series metadata and can also be refreshed explicitly. MangaDex supplies content hashes/filenames. Asura/Flame immutable image paths can distinguish transport signing fields from image identity. Unknown schemes remain conservative and retain meaningful query information in hashed identities.
 
 Known manual limits: ToonGod live-reader validation, changing third-party markup, English-only website adapters, paid/app-only access restrictions, real account sign-in, real reader rendering, tunnel deployment and unsigned installation. Account-library synchronization is not implemented; Followed Series is Bear Cave's own independent scheduler. No byte-range resume or automatic updater is implemented. Streaming CBZ replaces the old 512 MiB memory cap with a below-4-GiB ZIP32 bound.
 
@@ -28,3 +28,9 @@ Known manual limits: ToonGod live-reader validation, changing third-party markup
 npm.cmd run smoke:sources -- asura flame thunder webtoon
 npm.cmd run smoke:sources -- toongod
 ```
+
+## October 24, 2026 ToonGod investigation
+
+A direct HTTPS request to `https://www.toongod.org/` returned HTTP 403 with `Cf-Mitigated: challenge`. `npm.cmd run smoke:sources -- toongod` also returned the connector's source-specific action-required diagnostic at search. No live series, chapter list, reader or image success is claimed. No cookies, challenge tokens, CAPTCHA automation or bypass were added.
+
+Synthetic fixtures cover search, series/author metadata, chapter discovery, reader JSON, lazy image attributes and denied-access diagnostics. Code inspection also found that chapter-to-series links only searched `/comics/`; `/manga/` and `/webtoon/` are now recognized. Advertised chapter-list pagination is traversed. Live markup and AJAX-only chapter loading remain unverified while the source is protected.

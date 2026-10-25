@@ -1,3 +1,4 @@
+import { reconcile, libraryStatus, syncSeries } from '../engine/library.js';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
@@ -17,7 +18,7 @@ import { matching, selectionSummary, enqueueSelection } from '../engine/selectio
 const publicSeries = ({ coverRef, ...s }: Series) => ({
     ...s, title: s.title.slice(0, 300), description: s.description.slice(0, 4000)
 });
-const publicJob = ({ root, seriesFolder, previousOutputs, output, ...j }: import('../shared/types.js').Job) => ({
+const publicJob = ({ root, seriesFolder, previousOutputs, replacement, output, ...j }: import('../shared/types.js').Job) => ({
     ...j, error: j.error?.slice(0, 1200) ?? null, chapter: {
         ...j.chapter, title: j.chapter.title.slice(0, 500), groups: j.chapter.groups.slice(0, 30).map(g => ({ ...g, name: g.name.slice(0, 200) }))
     }, series: { ...publicSeries(j.series), description: "" }, output: output ? path.basename(output) : null
@@ -161,6 +162,12 @@ export function createDashboard(store: Store, queue: Queue, registry: Registry, 
                         ...page, jobs: page.jobs.map(publicJob), groups: store.groupSummaries(page.jobs), counts: store.counts(), holds: store.holds(), paused: Boolean(store.get('queue-paused'))
                     });
                 }
+                if (method === 'GET' && url.pathname === '/api/library-status') {
+                    const source = z.string().max(30).parse(url.searchParams.get('source')), id = opaqueId.parse(url.searchParams.get('id'));
+                    registry.get(source);
+                    const total = z.coerce.number().int().min(0).max(10000).parse(url.searchParams.get('total') ?? 0);
+                    return send(res, 200, libraryStatus(store, { source, id } as Series, total));
+                }
                 if (method === 'POST' && url.pathname === '/api/chapter-status') {
                     const data = z.object({ source: z.string().max(30), ids: z.array(opaqueId).max(100) }).strict().parse(await body(req));
                     const jobs = store.chapterJobs(data.source, data.ids);
@@ -199,6 +206,7 @@ export function createDashboard(store: Store, queue: Queue, registry: Registry, 
                     try {
                         const verification = await verifyOutput(job, abort.signal);
                         store.update(id, { verification });
+                        await syncSeries(store, registry.get(job.source), job.series, job.root, abort.signal).catch(e => console.warn('Metadata:', (e as Error).message));
                         return send(res, 200, verification);
                     }
                     finally {
@@ -207,7 +215,7 @@ export function createDashboard(store: Store, queue: Queue, registry: Registry, 
                     }
                 }
                 if (method === 'POST' && url.pathname === '/api/jobs/redownload') {
-                    const { id, mode } = z.object({ id: z.string().uuid(), mode: z.enum(['missing', 'copy']) }).strict().parse(await body(req));
+                    const { id, mode } = z.object({ id: z.string().uuid(), mode: z.enum(['missing', 'copy', 'replace']) }).strict().parse(await body(req));
                     if (verifying >= 2 || verifyingJobs.has(id))
                         throw new ApiError(429, 'Verification is busy.');
                     verifying++;
@@ -254,6 +262,7 @@ export function createDashboard(store: Store, queue: Queue, registry: Registry, 
                         throw new ApiError(400, 'Cover art is unavailable for this source.');
                     const series = await adapter.series(data.id, abort.signal), bytes = await adapter.cover(data.id, abort.signal);
                     await saveCover(s.downloadRoot, series.title, bytes, abort.signal, series, store);
+                    await syncSeries(store, adapter, series, s.downloadRoot, abort.signal).catch(e => console.warn('Metadata:', (e as Error).message));
                     return send(res, 200, { saved: true });
                 }
                 if (method === 'POST' && url.pathname === '/api/jobs/delete') {
@@ -291,15 +300,21 @@ export function createDashboard(store: Store, queue: Queue, registry: Registry, 
                     if (url.pathname === '/api/series') {
                         const series = await adapter.series(id, abort.signal);
                         covers.remember(series);
-                        return send(res, 200, publicSeries(series));
+                        const all = await matching(adapter, id, { language: '*' }, undefined, abort.signal);
+                        await reconcile(store, series, all, s, abort.signal);
+                        if (store.seriesJobs(series.source, series.id).length)
+                            await syncSeries(store, adapter, series, s.downloadRoot, abort.signal, all.length).catch(e => console.warn('Metadata:', (e as Error).message));
+                        return send(res, 200, { ...publicSeries(series), library: libraryStatus(store, series, all.length) });
                     }
                     const page = await adapter.chapters(id, { language: url.searchParams.get('language') ?? 'en', group: url.searchParams.get('group') || undefined }, offset, abort.signal);
                     const local = store.chapterJobs(adapter.manifest.id, page.items.map(c => c.id));
-                    return send(res, 200, { ...page, items: page.items.map(c => ({ ...c, localState: local[c.id]?.verification && ['missing', 'damaged'].includes(local[c.id].verification!.state) ? local[c.id].verification!.state : local[c.id]?.state ?? 'not_downloaded' })) });
+                    return send(res, 200, { ...page, items: page.items.map(c => ({
+                            ...c, localJobId: local[c.id]?.id, localState: local[c.id]?.verification && ['missing', 'damaged'].includes(local[c.id].verification!.state) ? local[c.id].verification!.state : local[c.id]?.state ?? 'not_downloaded'
+                        })) });
                 }
                 if (method === 'POST' && url.pathname === '/api/preview') {
                     const data = z.object({
-                        source: z.string().max(30), seriesId: opaqueId, language: z.string().min(2).max(10), group: opaqueId.optional(), ids: z.array(opaqueId).min(1).max(10000).optional()
+                        source: z.string().max(30), seriesId: opaqueId, language: z.string().min(2).max(10), group: opaqueId.optional(), ids: z.array(opaqueId).min(1).max(10000).optional(), all: z.boolean().optional(), exclude: z.array(opaqueId).max(10000).optional()
                     }).strict().parse(await body(req));
                     // The UI has one current confirmation per session; replacing/cancelling previews must not exhaust the cache.
                     for (const [id, p] of previews)
@@ -309,7 +324,9 @@ export function createDashboard(store: Store, queue: Queue, registry: Registry, 
                         throw new ApiError(429, 'A chapter preview is already in progress, or too many are pending.');
                     busyPreviews++;
                     try {
-                        const adapter = registry.get(data.source), series = await adapter.series(data.seriesId, abort.signal), chapters = await matching(adapter, data.seriesId, data, data.ids, abort.signal);
+                        const adapter = registry.get(data.source), series = await adapter.series(data.seriesId, abort.signal), resolved = await matching(adapter, data.seriesId, data.all ? { language: '*' } : data, data.all ? undefined : data.ids, abort.signal), chapters = resolved.filter(c => !data.exclude?.includes(c.id));
+                        await reconcile(store, series, chapters, s, abort.signal);
+                        await syncSeries(store, adapter, series, s.downloadRoot, abort.signal, data.all ? resolved.length : undefined).catch(e => console.warn('Metadata:', (e as Error).message));
                         return send(res, 200, previewFor(session.id, series, chapters));
                     }
                     finally {

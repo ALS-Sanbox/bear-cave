@@ -3,6 +3,11 @@ import type { Store } from '../core/store.js';
 import type { Registry } from '../sources/registry.js';
 import { SafeHttp, sharedHttp } from '../sources/http.js';
 import { SourceError, type Job, type Settings } from '../shared/types.js';
+import { rename } from 'node:fs/promises';
+import { randomUUID } from 'node:crypto';
+import { checkPath } from './folders.js';
+import { verifyOutput } from './verification.js';
+import { syncSeries } from './library.js';
 import { ChapterOutput } from './files.js';
 export class PagePool {
     active = 0;
@@ -68,12 +73,44 @@ export class Queue {
     }
     private async execute(job: Job, signal: AbortSignal) {
         try {
-            const output = await (this.worker ? this.worker(job, signal) : this.download(job, signal));
+            let output = await (this.worker ? this.worker(job, signal) : this.download(job, signal));
+            if (job.replacement) {
+                const checked = await verifyOutput({ ...job, output }, signal);
+                if (checked.state !== 'verified')
+                    throw Error('Replacement failed verification. Original chapter preserved.');
+                await checkPath(job.root, job.replacement.original);
+                const backup = job.replacement.original + `.backup-${randomUUID().slice(0, 8)}`;
+                this.store.update(job.id, { previousOutputs: [...(this.store.job(job.id)?.previousOutputs ?? []), backup] });
+                let moved = false;
+                try {
+                    try {
+                        await rename(job.replacement.original, backup);
+                        moved = true;
+                    }
+                    catch (e) {
+                        if ((e as NodeJS.ErrnoException).code !== 'ENOENT')
+                            throw e;
+                    }
+                    await rename(output, job.replacement.original);
+                }
+                catch (e) {
+                    if (moved)
+                        await rename(backup, job.replacement.original);
+                    throw e;
+                }
+                output = job.replacement.original;
+                this.store.update(job.id, {
+                    replacement: undefined, copySuffix: job.replacement.suffix,
+                    previousOutputs: [...new Set([...(this.store.job(job.id)?.previousOutputs ?? []).filter(p => p !== output && p !== backup), ...(moved ? [backup] : [])])]
+                });
+            }
             // Commit completion only if the job has not been paused/cancelled during finalization.
             if (this.store.job(job.id)?.state === 'running')
                 this.store.update(job.id, {
-                    state: 'completed', done: this.store.job(job.id)!.total, output, error: null
+                    completedAt: new Date().toISOString(), verification: { state: 'verified', checked: new Date().toISOString() }, state: 'completed', done: this.store.job(job.id)!.total, output, error: null
                 });
+            if (!this.worker)
+                await syncSeries(this.store, this.registry.get(job.source), job.series, job.root).catch(e => console.warn('Series metadata:', (e as Error).message));
         }
         catch (e) {
             if (signal.aborted)
@@ -93,6 +130,7 @@ export class Queue {
     }
     private async download(job: Job, signal: AbortSignal): Promise<string> {
         const adapter = this.registry.get(job.source);
+        await syncSeries(this.store, adapter, job.series, job.root, signal).catch(e => console.warn('Series metadata:', (e as Error).message));
         let resolved = await adapter.resolve(job.chapter.id, signal);
         const output = new ChapterOutput(job, this.store);
         await output.open(resolved.revision, resolved.urls.length, resolved.identities);

@@ -7,8 +7,8 @@ import { Registry } from '../src/sources/registry.js';
 import { createDashboard } from '../src/server/server.js';
 import { hashPassword,verifyPassword } from '../src/server/auth.js';
 import { workspace,chapter,adapter } from './helpers.js';
-async function harness() {
-  const w=await workspace(),store=new Store(':memory:');const ch=chapter();const registry=new Registry([adapter([ch,{...chapter(),number:ch.number}])]);
+async function harness(count = 2) {
+  const w=await workspace(),store=new Store(':memory:');const ch=chapter();const registry=new Registry([adapter(count === 2 ? [ch,{...chapter(),number:ch.number}] : Array.from({length:count},(_,i)=>chapter({number:String(i+1)})))]);
   const queue=new Queue(store,registry,()=>w.settings);store.set('queue-paused',true);store.set('admin-hash',await hashPassword('correct horse battery staple'));
   const dashboard=createDashboard(store,queue,registry,()=>w.settings,path.resolve('dist/ui'));const port=await dashboard.listen(0),origin=`http://127.0.0.1:${port}`;
   let cookie='',csrf='';
@@ -17,6 +17,17 @@ async function harness() {
   return {w,store,queue,dashboard,origin,request,login,cleanup:async()=>{await dashboard.close();await queue.stop();store.close();await w.cleanup();}};
 }
 describe('dashboard security and queue API',()=> {
+  it('selects all 187 server-side regardless of filters, excludes stable IDs and deduplicates repeated submissions',async()=>{const h=await harness(187);try{
+    await h.login(); const id='11111111-1111-4111-8111-111111111111';
+    const page=await(await h.request(`/api/chapters?source=mangadex&id=${id}`)).json();
+    const excluded=page.items[0].id;
+    const preview=await(await h.request('/api/preview',{source:'mangadex',seriesId:id,language:'fr',group:'ignored',all:true,exclude:[excluded]})).json();
+    expect(preview.count).toBe(186);
+    expect((await h.request('/api/enqueue',{token:preview.token,confirmTranslations:true})).status).toBe(200);
+    expect((await h.request('/api/enqueue',{token:preview.token,confirmTranslations:true})).status).toBe(400);
+    expect(h.store.jobs()).toHaveLength(186);expect(h.store.jobs().some(j=>j.chapter.id===excluded)).toBe(false);
+  }finally{await h.cleanup();}});
+
   it('paginates history, reports chapter status, and keeps output paths private',async()=>{const h=await harness();try{await h.login();const a=chapter(),j=h.store.enqueue({id:a.seriesId,source:a.source,title:'History fixture',description:''},a,h.w.settings).job;h.store.update(j.id,{state:'completed',output:path.join(h.w.dir,'private','file.cbz'),seriesFolder:path.join(h.w.dir,'private'),previousOutputs:[path.join(h.w.dir,'older.cbz')],verification:{state:'missing',checked:new Date().toISOString()}});const queue=await(await h.request('/api/jobs')).json();expect(queue.jobs).toHaveLength(0);const history=await(await h.request('/api/jobs?history=true&limit=1&q=History&state=missing')).json();expect(history.total).toBe(1);expect(history.counts.completed).toBe(1);expect(JSON.stringify(history)).not.toContain(h.w.dir);const status=await(await h.request('/api/chapter-status',{source:a.source,ids:[a.id]})).json();expect(status[a.id]).toBe('missing');expect((await h.request('/api/jobs/verify',{id:j.id,path:'C:/private'})).status).toBe(400);}finally{await h.cleanup();}});
   it('persists follow preferences and reuses the guarded confirmation preview',async()=>{const h=await harness();try{await h.login();const record=await(await h.request('/api/follows',{source:'mangadex',seriesId:'11111111-1111-4111-8111-111111111111',language:'en',intervalHours:6,enabled:false,autoDownload:false,outputFormat:'folders'})).json();expect(record.autoDownload).toBe(false);expect(record.outputFormat).toBe('folders');const preview=await(await h.request(`/api/follows/${record.id}/preview`,{})).json();expect(preview.count).toBe(2);expect(preview.multipleTranslations).toBe(1);expect((await h.request('/api/enqueue',{token:preview.token,confirmTranslations:false})).status).toBe(400);expect((await h.request('/api/enqueue',{token:preview.token,confirmTranslations:true})).status).toBe(200);expect(h.store.jobs().every(j=>j.format==='folders')).toBe(true);expect((await h.request('/api/follows',{source:'mangadex',seriesId:record.series.id,language:'en',intervalHours:0})).status).toBe(400);expect((await h.request(`/api/follows/${record.id}/remove`,{})).status).toBe(200);expect(h.store.follows()).toHaveLength(0);}finally{await h.cleanup();}});
   it('replaces cancelled previews without exhausting the session cache',async()=>{const h=await harness();try{await h.login();let previous='',latest='';for(let i=0;i<12;i++){const response=await h.request('/api/preview',{source:'mangadex',seriesId:'11111111-1111-4111-8111-111111111111',language:'en'});expect(response.status).toBe(200);previous=latest;latest=(await response.json()).token;}expect(h.store.jobs()).toHaveLength(0);expect((await h.request('/api/enqueue',{token:previous,confirmTranslations:true})).status).toBe(400);expect((await h.request('/api/enqueue',{token:latest,confirmTranslations:true})).status).toBe(200);}finally{await h.cleanup();}});

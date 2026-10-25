@@ -5,8 +5,16 @@ export interface Series {
     title: string;
     description: string;
     coverRef?: string;
+    url?: string;
+    metadata?: Record<string, unknown>;
+    library?: {
+        state: string;
+        downloaded: number;
+        total: number;
+    };
 }
 export interface Chapter {
+    url?: string;
     id: string;
     source: string;
     seriesId: string;
@@ -21,6 +29,7 @@ export interface Chapter {
     pages: number | null;
     external: boolean;
     localState?: string;
+    localJobId?: string;
 }
 export interface PageResult<T> {
     items: T[];
@@ -43,12 +52,17 @@ export interface Job {
     attempts: number;
     error: string | null;
     output: string | null;
+    completedAt?: string;
     created: string;
     updated: string;
     root: string;
     format: 'folders' | 'cbz';
     seriesFolder?: string;
     copySuffix?: string;
+    replacement?: {
+        original: string;
+        suffix?: string;
+    };
     verification?: {
         state: 'verified' | 'missing' | 'damaged' | 'inaccessible';
         checked: string;

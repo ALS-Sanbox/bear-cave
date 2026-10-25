@@ -63,6 +63,23 @@ export async function seriesDirectory(root: string, series: Series, store?: Stor
             }
         }
     }
+    // Portable markers also recover renamed series and libraries whose SQLite history was lost.
+    for (const entry of await readdir(root, { withFileTypes: true })) {
+        if (!entry.isDirectory() || entry.name.startsWith('.'))
+            continue;
+        const dir = contained(root, entry.name);
+        try {
+            await checkPath(root, dir);
+            if ((await markerData(contained(dir, '.bear-cave-series.json'))).identity !== identity)
+                continue;
+            if (store?.folderConflict(dir, series.source, series.id))
+                continue;
+            store?.claimFolder(root, identity, entry.name);
+            return dir;
+        }
+        catch { /* Unmarked and unrelated directories are left untouched. */
+        }
+    }
     const base = safeName(series.title, 65), suffix = digest(Buffer.from(identity)).slice(0, 8);
     for (const candidate of [base, `${safeName(series.title, 52)} [${series.source}-${suffix}]`]) {
         const existing = (await readdir(root)).find(n => n.toLowerCase() === candidate.toLowerCase()), dir = contained(root, existing ?? candidate);

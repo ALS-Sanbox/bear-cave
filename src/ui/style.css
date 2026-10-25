@@ -965,3 +965,63 @@ footer span {
   flex: 1;
   min-width: 0;
 }
+
+/* Chapter actions stay visible and touchable on narrow screens. */
+
+.chapters input[type=checkbox] {
+  width: 24px;
+  height: 24px;
+  cursor: pointer;
+}
+
+.chapters button {
+  min-height: 44px;
+}
+
+@media(max-width:700px) {
+
+  .chapters .table-scroll {
+    overflow: visible;
+  }
+
+  .chapters table, .chapters tbody {
+    display: block;
+  }
+
+  .chapters thead {
+    display: none;
+  }
+
+  .chapters tr {
+    display: grid;
+    grid-template-columns: 36px minmax(0,1fr);
+    border-bottom: 1px solid #f4e6d9;
+    padding: 12px 0;
+  }
+
+  .chapters td {
+    border: 0;
+    padding: 6px;
+    overflow-wrap: anywhere;
+    min-width: 0;
+  }
+
+  .chapters td:nth-child(n+3) {
+    grid-column: 2;
+  }
+
+  .chapters td:last-child {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+
+  .chapters .section-bar, .chapters .inline {
+    align-items: stretch;
+    flex-wrap: wrap;
+  }
+
+  .chapters .pagination {
+    flex-wrap: wrap;
+  }
+}

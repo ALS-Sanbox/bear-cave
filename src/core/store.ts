@@ -74,8 +74,14 @@ export class Store {
             ...series, coverRef: undefined, title: series.title.slice(0, 300), description: series.description.slice(0, 4000)
         };
         const existing = this.db.prepare('SELECT data FROM jobs WHERE source=? AND chapter_id=?').get(chapter.source, chapter.id);
-        if (existing)
-            return { job: JSON.parse(String(existing.data)), duplicate: true };
+        if (existing) {
+            const job = JSON.parse(String(existing.data)) as Job;
+            if (job.state === 'completed' && job.verification?.state === 'missing')
+                return { job: this.update(job.id, {
+                        state: 'queued', root: settings.downloadRoot, output: null, done: 0, verification: undefined, seriesFolder: undefined
+                    }), duplicate: false };
+            return { job, duplicate: true };
+        }
         const now = new Date().toISOString();
         const job: Job = {
             id: randomUUID(), source: chapter.source, series, chapter, state: 'queued', done: 0, total: chapter.pages ?? 0, attempts: 0, error: null, output: null, created: now, updated: now, root: settings.downloadRoot, format: settings.format

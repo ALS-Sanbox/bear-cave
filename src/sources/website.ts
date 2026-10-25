@@ -113,11 +113,11 @@ export abstract class WebsiteSource implements SourceAdapter {
     }
     protected chapterItem(seriesId: string, path: string, number: string, title = '', pages: number | null = null): Chapter {
         return {
-            id: encodePath(this.path(path)), source: this.manifest.id, seriesId, title: text(title), number, volume: '', language: 'en', groups: [{ id: this.manifest.id, name: this.manifest.name }], pages, external: false
+            url: new URL(this.path(path), this.manifest.website).href, id: encodePath(this.path(path)), source: this.manifest.id, seriesId, title: text(title), number, volume: '', language: 'en', groups: [{ id: this.manifest.id, name: this.manifest.name }], pages, external: false
         };
     }
     protected matches(filter: ChapterFilter) {
-        return filter.language === 'en' && (!filter.group || filter.group === this.manifest.id);
+        return (filter.language === 'en' || filter.language === '*') && (!filter.group || filter.group === this.manifest.id);
     }
     protected sort(chapters: Chapter[]) {
         return [...new Map(chapters.map(c => [c.id, c])).values()].sort((a, b) => a.number.localeCompare(b.number, undefined, { numeric: true }));

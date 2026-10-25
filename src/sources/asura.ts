@@ -39,7 +39,7 @@ export class Asura extends WebsiteSource {
         if (!title)
             throw new SourceError('Asura series data changed.');
         return {
-            id, source: 'asura', title, description: $('meta[name="description"]').attr('content') ?? ''
+            id, source: 'asura', title, url: this.url(id), metadata: { authors: $('.author a').toArray().map(e => $(e).text().trim()), genres: $('.genres a').toArray().map(e => $(e).text().trim()) }, description: $('meta[name="description"]').attr('content') ?? ''
         };
     }
     async chapters(id: string, filter: ChapterFilter, offset = 0, signal?: AbortSignal) {

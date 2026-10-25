@@ -17,15 +17,15 @@ First launch opens local Settings. Choose a writable root and set an administrat
 
 ## Using the library
 
-- Discover a series and select a translation where supported. Previews show matching, completed, existing and **new** counts. Confirmation adds only new identities.
+- Discover a series. **Select All N Chapters** selects the entire source series across pages and filters, using server resolution and stable ID exclusions. **Select This Page** selects visible chapters. Individual checkboxes and selections survive paging. All languages/translations are included by Select All; additional translations still require confirmation. Previews show the actual missing count and skip existing identities.
 - Queue chapters appear in collapsible series groups with aggregate progress and individual/group controls. Removing entries keeps files. History is paginated, searchable and filtered by source/status.
-- **Verify downloaded file** distinguishes missing, damaged and inaccessible output. **Download again** requeues known missing output or explicitly creates a separate copy. Good existing files are kept; history tracks the latest attempt for each source/chapter identity.
-- Covers load through an authenticated controlled endpoint with the mark as fallback. **Download cover art** saves a real coverart.png beside chapters.
+- **Verify downloaded file** distinguishes missing, damaged and inaccessible output. **Re-download** (also History ? **Download again**) explicitly replaces a chapter only after the staged replacement passes verification. Original output is kept on failure; successful replacements retain a `.backup-*` recovery copy. Source/chapter uniqueness prevents simultaneous jobs.
+- Covers load through an authenticated controlled endpoint with the mark as fallback. Downloads automatically save PNG-converted **coverart.png** and atomic UTF-8 **metadata.json** beside chapters. Valid covers are reused; **Download cover art** explicitly refreshes one. Cover/metadata failures are logged without stopping chapter downloads.
 - **Follow series** retains source, language/group and download preferences. Followed Series provides Check now, Download missing chapters and optional schedules. Checks run **only while Bear Cave is running**, at 1–168-hour intervals. Global pause suspends automatic work; repeated failures back off and pause for review. Automatic downloading is opt-in, and extra translations still need consent.
 - Complete source interaction in its local browser, then use **Retry affected downloads** to release eligible source holds, including stale holds whose original jobs were deleted. Website login and personal-client API login remain separate.
 - Local Settings → Staging maintenance scans recognizable abandoned recovery data. A fresh scan and native confirmation precede cleanup. Active, queued, paused, followed recovery and completed output are excluded. Unknown/untracked folders are not swept.
 
-New files use Download root/Series Name/Series Name 001.cbz, or the equivalent chapter image folder. Decimal chapters retain decimals; large numbers are not truncated. Persistent folder mappings handle title changes, Windows case/sanitization collisions and cross-source collisions. Existing completed files stay in their original locations. Covers share the same mapping; .bear-cave metadata supports recovery and claims.
+New files use Download root/Series Name/Series Name 001.cbz, or the equivalent chapter image folder. Decimal chapters retain decimals; large numbers are not truncated. Persistent folder mappings handle title changes, Windows case/sanitization collisions and cross-source collisions. Series details show backend download status and counts. Opening a series or previewing downloads reconciles identity-marked folders/CBZ manifests and verifies image signatures, sizes and SHA-256 checksums, including output whose job history was lost. A changed download root is checked independently. Unmarked folders are preserved rather than guessed from titles. Covers share the same mapping; .bear-cave metadata supports recovery and claims.
 
 ## Verification and packaging
 
@@ -54,3 +54,5 @@ SQLite/settings/logs/source profiles live in Electron userData (normally %APPDAT
 Images are capped at 32 MiB and chapters at 2,000 pages. Streaming CBZ uses a below-4-GiB ZIP32 limit; image folders avoid that aggregate cap. Recovery verifies complete pages, without byte-range resume. Unknown URL identity schemes stay conservative; an unchanged source path without version/hash information cannot reveal an upstream overwrite. Website sources are English-only. Access restrictions, ToonGod live validation, manual real-account verification and unsigned installation remain practical limits.
 
 [Architecture](docs/architecture.md) · [Source development](docs/source-development.md) · [Remote access](docs/remote-access.md) · [Accounts](docs/accounts.md) · [Historical phase records](docs/phase-status.md)
+
+Implementation and current verification: [selection, library metadata and safe replacement](docs/library-downloads.md).

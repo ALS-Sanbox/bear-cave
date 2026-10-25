@@ -60,7 +60,7 @@ export async function verifyOutput(job: Job, signal?: AbortSignal): Promise<NonN
     }
     return { state, checked: new Date().toISOString() };
 }
-export async function redownload(store: Store, id: string, mode: 'missing' | 'copy', signal?: AbortSignal) {
+export async function redownload(store: Store, id: string, mode: 'missing' | 'copy' | 'replace', signal?: AbortSignal) {
     if (store.maintenanceActive)
         throw Error('Local maintenance is running. Try again shortly.');
     const job = store.job(id);
@@ -77,7 +77,9 @@ export async function redownload(store: Store, id: string, mode: 'missing' | 'co
     signal?.throwIfAborted();
     if (store.maintenanceActive)
         throw Error('Local maintenance is running. Try again shortly.');
+    if (store.job(id)?.state !== 'completed')
+        throw Error('Chapter is already queued.');
     return store.update(id, {
-        state: 'queued', seriesFolder, done: 0, error: null, output: null, verification: undefined, copySuffix: mode === 'copy' ? ` [copy ${Date.now()}]` : job.copySuffix, previousOutputs: [...(job.previousOutputs ?? []), ...(job.output && verification.state !== 'missing' ? [job.output] : [])]
+        replacement: mode === 'replace' && job.output ? { original: job.output, suffix: job.copySuffix } : undefined, state: 'queued', seriesFolder, done: 0, error: null, output: null, verification: undefined, copySuffix: mode !== 'missing' ? ` [copy ${Date.now()}]` : job.copySuffix, previousOutputs: [...(job.previousOutputs ?? []), ...(job.output && verification.state !== 'missing' ? [job.output] : [])]
     });
 }

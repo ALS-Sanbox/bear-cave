@@ -8,6 +8,8 @@ export async function matching(adapter: SourceAdapter, seriesId: string, filter:
         guard?.();
         const page = await adapter.chapters(seriesId, filter, offset, signal);
         signal?.throwIfAborted();
+        if (!Number.isInteger(page.limit) || page.limit <= 0 || !page.items.length && offset < page.total)
+            throw Error('Source returned an incomplete chapter page. Retry or report the connector.');
         chapters.push(...page.items);
         offset += page.limit;
         if (ids?.every(id => chapters.some(c => c.id === id)) || offset >= page.total)
@@ -21,7 +23,7 @@ export async function matching(adapter: SourceAdapter, seriesId: string, filter:
     return unique;
 }
 export function selectionSummary(store: Store, source: string, chapters: Chapter[]) {
-    const existing = store.chapterJobs(source, chapters.map(c => c.id)), fresh = chapters.filter(c => !existing[c.id]);
+    const existing = store.chapterJobs(source, chapters.map(c => c.id)), fresh = chapters.filter(c => !existing[c.id] || existing[c.id].state === 'completed' && existing[c.id].verification?.state === 'missing');
     let multipleTranslations = 0;
     const logical = new Set<string>();
     // Existing translations also count: adding another group must never happen silently.
@@ -29,12 +31,12 @@ export function selectionSummary(store: Store, source: string, chapters: Chapter
         logical.add(key);
     for (const c of fresh) {
         const key = `${c.volume}|${c.number}|${c.language}`;
-        if (logical.has(key))
+        if (!existing[c.id] && logical.has(key))
             multipleTranslations++;
         logical.add(key);
     }
     return {
-        count: fresh.length, total: chapters.length, completed: chapters.filter(c => existing[c.id]?.state === 'completed').length, existing: chapters.filter(c => existing[c.id] && existing[c.id].state !== 'completed').length, multipleTranslations
+        count: fresh.length, total: chapters.length, completed: chapters.filter(c => existing[c.id]?.state === 'completed' && !['missing', 'damaged'].includes(existing[c.id]?.verification?.state ?? '')).length, existing: chapters.filter(c => existing[c.id] && existing[c.id].state !== 'completed').length, multipleTranslations
     };
 }
 export function enqueueSelection(store: Store, series: Series, chapters: Chapter[], settings: import('../shared/types.js').Settings, confirmTranslations: boolean) {

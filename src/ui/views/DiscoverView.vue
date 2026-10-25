@@ -26,6 +26,7 @@ const languages = languageOptions;
       <div>
         <p class="eyebrow">{{model.detail.source}}</p>
         <h2>{{model.detail.title}}</h2>
+        <p v-if="model.detail.library" role="status">{{model.detail.library.state}} ? {{model.detail.library.downloaded}} / {{model.detail.library.total}} Chapters Downloaded</p>
         <p class="description">{{model.detail.description||'No description available.'}}</p>
         <div class="inline">
           <button :disabled="model.busy" @click="model.downloadCover">Download cover art</button>
@@ -57,8 +58,10 @@ const languages = languageOptions;
       <div class="section-bar">
         <h2>{{model.chapters.total.toLocaleString()}} matching chapters</h2>
         <div class="inline">
-          <button :disabled="!model.selected.length||model.busy" @click="model.prepare(model.selected)">Download selected ({{model.selected.length}})</button>
-          <button class="primary" :disabled="!model.chapters.total||model.busy" @click="model.prepare()">Preview all matching</button>
+          <button :disabled="!model.selectedCount||model.busy" @click="model.prepareSelected()">Download selected ({{model.selectedCount}})</button>
+          <button :disabled="model.busy" @click="model.selectAll()">Select All {{model.seriesTotal}} Chapters</button>
+          <button @click="model.selectPage()">Select This Page</button>
+          <button @click="model.deselectAll()">Deselect All</button>
         </div>
       </div>
       <div v-if="!model.chapters.items.length" class="empty">No downloadable chapters match these filters.</div>
@@ -67,7 +70,7 @@ const languages = languageOptions;
           <thead>
             <tr>
               <th>
-                <input type="checkbox" aria-label="Select this page" :checked="model.selected.length===model.chapters.items.length" @change="model.selected=($event.target as HTMLInputElement).checked?model.chapters.items.map(c=>c.id):[]">
+                <input type="checkbox" aria-label="Select this page" :checked="model.chapters.items.every(c=>model.isSelected(c.id))" @change="model.selectPage(($event.target as HTMLInputElement).checked)">
               </th>
               <th>Chapter</th>
               <th>Translation</th>
@@ -79,7 +82,7 @@ const languages = languageOptions;
           <tbody>
             <tr v-for="chapter in model.chapters.items" :key="chapter.id">
               <td>
-                <input v-model="model.selected" type="checkbox" :value="chapter.id" :aria-label="`Select chapter ${chapter.number}`">
+                <input type="checkbox" :checked="model.isSelected(chapter.id)" @change="model.toggleChapter(chapter.id,($event.target as HTMLInputElement).checked)" :aria-label="`Select chapter ${chapter.number}`">
               </td>
               <td>
                 <strong>{{chapter.volume?`Vol. ${chapter.volume} · `:''}}Ch. {{chapter.number}}</strong>
@@ -93,7 +96,11 @@ const languages = languageOptions;
               <td>{{statusLabels[chapter.localState??'not_downloaded']}}</td>
               <td>{{chapter.pages??'On resolution'}}</td>
               <td>
-                <button :disabled="model.busy" @click="model.prepare([chapter.id])">Download</button>
+                <button v-if="chapter.localState!=='completed'" :disabled="model.busy" @click="model.prepare([chapter.id])">Download</button>
+                <template v-if="chapter.localJobId && ['completed','damaged','missing'].includes(chapter.localState??'')">
+                  <button :disabled="model.busy" @click="model.chapterAction(chapter.localJobId!,'verify')">Verify Chapter</button>
+                  <button :disabled="model.busy" @click="model.chapterAction(chapter.localJobId!,'redownload')">Re-download</button>
+                </template>
               </td>
             </tr>
           </tbody>

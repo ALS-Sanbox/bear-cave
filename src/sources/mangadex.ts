@@ -23,13 +23,20 @@ function localized(value: unknown): string {
 }
 export function parseSeries(e: Entity): Series {
     return {
-        id: e.id, source: 'mangadex', title: localized(e.attributes.title) || 'Untitled', description: localized(e.attributes.description), coverRef: z.string().optional().parse(e.relationships.find(r => r.type === 'cover_art')?.attributes?.fileName)
+        id: e.id, source: 'mangadex', url: `https://mangadex.org/title/${e.id}`, metadata: {
+            alternative_titles: Array.isArray(e.attributes.altTitles) ? e.attributes.altTitles.flatMap(v => Object.values(v as Record<string, string>)) : [],
+            authors: e.relationships.filter(r => r.type === 'author').map(r => r.attributes?.name).filter(Boolean),
+            artists: e.relationships.filter(r => r.type === 'artist').map(r => r.attributes?.name).filter(Boolean),
+            genres: Array.isArray(e.attributes.tags) ? e.attributes.tags.map((t: any) => localized(t.attributes?.name)).filter(Boolean) : [],
+            status: e.attributes.status ?? null, release_year: e.attributes.year ?? null, original_language: e.attributes.originalLanguage ?? null,
+            attributes: e.attributes
+        }, title: localized(e.attributes.title) || 'Untitled', description: localized(e.attributes.description), coverRef: z.string().optional().parse(e.relationships.find(r => r.type === 'cover_art')?.attributes?.fileName)
     };
 }
 export function parseChapter(e: Entity): Chapter {
     const a = e.attributes;
     return {
-        id: e.id, source: 'mangadex', seriesId: e.relationships.find(r => r.type === 'manga')?.id ?? '', title: String(a.title ?? ''), number: String(a.chapter ?? 'Oneshot'), volume: String(a.volume ?? ''), language: String(a.translatedLanguage ?? ''), groups: e.relationships.filter(r => r.type === 'scanlation_group').map(r => ({ id: r.id, name: r.attributes?.name ?? r.id })), pages: typeof a.pages === 'number' ? a.pages : 0, external: Boolean(a.externalUrl)
+        url: `https://mangadex.org/chapter/${e.id}`, id: e.id, source: 'mangadex', seriesId: e.relationships.find(r => r.type === 'manga')?.id ?? '', title: String(a.title ?? ''), number: String(a.chapter ?? 'Oneshot'), volume: String(a.volume ?? ''), language: String(a.translatedLanguage ?? ''), groups: e.relationships.filter(r => r.type === 'scanlation_group').map(r => ({ id: r.id, name: r.attributes?.name ?? r.id })), pages: typeof a.pages === 'number' ? a.pages : 0, external: Boolean(a.externalUrl)
     };
 }
 export type JsonClient = Pick<SafeHttp, 'json'>;
@@ -64,7 +71,7 @@ export class MangaDex implements SourceAdapter {
     }
     async series(id: string, signal?: AbortSignal): Promise<Series> {
         uuid.parse(id);
-        const r = z.object({ data: entity }).parse(await this.api(`/manga/${id}`, new URLSearchParams({ 'includes[]': 'cover_art' }), signal));
+        const r = z.object({ data: entity }).parse(await this.api(`/manga/${id}`, new URLSearchParams([['includes[]', 'cover_art'], ['includes[]', 'author'], ['includes[]', 'artist']]), signal));
         return parseSeries(r.data);
     }
     async chapter(id: string, signal?: AbortSignal): Promise<Chapter> {
@@ -76,7 +83,8 @@ export class MangaDex implements SourceAdapter {
         uuid.parse(id);
         const p = this.pagination(offset, 100);
         p.set('manga', id);
-        p.set('translatedLanguage[]', z.string().regex(/^[a-z]{2,3}(-[a-z]{2})?$/).parse(filter.language));
+        if (filter.language !== '*')
+            p.set('translatedLanguage[]', z.string().regex(/^[a-z]{2,3}(-[a-z]{2})?$/).parse(filter.language));
         if (filter.group)
             p.set('groups[]', uuid.parse(filter.group));
         p.set('includes[]', 'scanlation_group');

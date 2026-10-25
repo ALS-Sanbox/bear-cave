@@ -8,7 +8,7 @@ export class Flame extends WebsiteSource {
         if (!Number.isInteger(s?.series_id) || typeof s.title !== 'string')
             throw new SourceError('Flame series data changed.');
         return {
-            id: encodePath(`/series/${s.series_id}`), source: 'flame', title: s.title, description: text(s.description ?? ''), coverRef: this.coverReference(s.cover ?? s.cover_url)
+            id: encodePath(`/series/${s.series_id}`), source: 'flame', title: s.title, metadata: { ...s }, description: text(s.description ?? ''), coverRef: this.coverReference(s.cover ?? s.cover_url)
         };
     }
     async search(query: string, offset = 0, signal?: AbortSignal) {
