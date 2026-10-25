@@ -1,3 +1,5 @@
+import { syncSeries } from '../engine/library.js';
+import { consolidateLibrary } from '../engine/consolidation.js';
 import { app, BrowserWindow, Tray, Menu, dialog, ipcMain, nativeImage, shell } from 'electron';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -110,7 +112,26 @@ else {
             store.set('queue-paused', true);
             dialog.showErrorBox('Download folder unavailable', 'Downloads are paused. Choose a writable local folder in Settings. Existing jobs retain their original destinations.');
         }
+        let combinedFolders = 0;
+        try {
+            const result = await consolidateLibrary(store, settings.downloadRoot);
+            combinedFolders = result.merged + result.linked;
+            if (combinedFolders)
+                await log(`Combined ${result.merged} cross-source folder(s); linked ${result.linked} source identities.`);
+        }
+        catch (e) {
+            store.set('queue-paused', true);
+            await log(`Library consolidation incomplete; downloads paused: ${(e as Error).message}`);
+        }
         const registry = new Registry([new MangaDex(sharedHttp), ...websiteAdapters((id, url) => sessions.cookies(id, url))]);
+        if (combinedFolders) {
+            const series = new Map(store.jobs().filter(j => path.resolve(j.root) === path.resolve(settings.downloadRoot)).map(j => [`${j.source}:${j.series.id}`, j.series]));
+            for (const s of series.values()) {
+                if (!store.libraryJobs(s.source, s.id, settings.downloadRoot).some(j => j.source !== s.source))
+                    continue;
+                await syncSeries(store, registry.get(s.source), s, settings.downloadRoot, undefined, undefined, { offline: true }).catch(e => log(`Library metadata: ${(e as Error).message}`));
+            }
+        }
         queue = new Queue(store, registry, () => settings);
         const maintenance = new StagingMaintenance(store, queue);
         const mangaAccount = new MangaDexAccount(new SecretVault(path.join(data, 'secrets')));

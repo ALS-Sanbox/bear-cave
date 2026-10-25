@@ -17,8 +17,8 @@ app.whenReady().then(async()=>{
   const series={id:'fixture-series',source:'mangadex',title:'Download fixture',description:'A long deterministic chapter list.'};
   const chapters=Array.from({length:1000},(_,i)=>({id:`fixture-chapter-${i+1}`,source:'mangadex',seriesId:series.id,title:`Fixture ${i+1}`,number:String(i+1),volume:'',language:'en',groups:[],pages:2,external:false}));
   const png=await require('sharp')({create:{width:2,height:3,channels:3,background:'#a7470b'}}).png().toBuffer();
-  let failPreview=false,allowAll=true,activeListings=0;
-  const source={manifest:{id:'mangadex',name:'Fixture source',website:'https://fixture.example/',status:'operational',interfaceVersion:1,capabilities:['search','series','chapters','public-download'],apiHosts:['fixture.example'],imageHosts:['fixture.example'],recommended:{chapters:1,pageRequests:1,requestIntervalMs:1000}},search:async()=>({items:[series],total:1,offset:0,limit:20}),series:async()=>series,chapters:async(_id,_filter,offset,signal)=>{activeListings++;try{await delay(150,undefined,{signal});if(failPreview)throw new SourceError('Fixture source unavailable. Try again.');if(offset>0&&!allowAll)throw new SourceError('Single selection scanned unrelated chapter pages.');return{items:chapters.slice(offset,offset+100),total:chapters.length,offset,limit:100};}finally{activeListings--;}},chapter:async id=>chapters.find(c=>c.id===id),resolve:async()=>({revision:'fixture',urls:['https://fixture.example/1.png','https://fixture.example/2.png']}),readPage:async()=>png,cover:async()=>png};
+  let coverOffline=false,failPreview=false,allowAll=true,activeListings=0;
+  const source={manifest:{id:'mangadex',name:'Fixture source',website:'https://fixture.example/',status:'operational',interfaceVersion:1,capabilities:['search','series','chapters','public-download'],apiHosts:['fixture.example'],imageHosts:['fixture.example'],recommended:{chapters:1,pageRequests:1,requestIntervalMs:1000}},search:async()=>({items:[series],total:1,offset:0,limit:20}),series:async()=>series,chapters:async(_id,_filter,offset,signal)=>{activeListings++;try{await delay(150,undefined,{signal});if(failPreview)throw new SourceError('Fixture source unavailable. Try again.');if(offset>0&&!allowAll)throw new SourceError('Single selection scanned unrelated chapter pages.');return{items:chapters.slice(offset,offset+100),total:chapters.length,offset,limit:100};}finally{activeListings--;}},chapter:async id=>chapters.find(c=>c.id===id),resolve:async()=>({revision:'fixture',urls:['https://fixture.example/1.png','https://fixture.example/2.png']}),readPage:async()=>png,cover:async()=>{if(coverOffline)throw Error('Cover source offline');return png;}};
   const registry=new Registry([source]);queue=new Queue(store,registry,()=>settings);dashboard=createDashboard(store,queue,registry,()=>settings,path.resolve('dist/ui'));const port=await dashboard.listen(0);
   window=new BrowserWindow({show:false,width:1000,height:800,webPreferences:{sandbox:true,contextIsolation:true,nodeIntegration:false,backgroundThrottling:false}});
   const js=script=>window.webContents.executeJavaScript(script,true).catch(error=>{throw new Error(`${error.message}\nRenderer script: ${script}`);});
@@ -32,7 +32,11 @@ app.whenReady().then(async()=>{
   await js(`(()=>{const input=document.querySelector('input[type=password]');input.value='download test password';input.dispatchEvent(new Event('input',{bubbles:true}));document.querySelector('.login form').requestSubmit();})()`);
   await until(()=>js('!!document.querySelector(".searchbar button:not(:disabled)")'),'signed in');
   await js(`(()=>{const input=document.querySelector('.searchbar input');input.value='fixture';input.dispatchEvent(new Event('input',{bubbles:true}));document.querySelector('.searchbar').requestSubmit();})()`);
-  await until(()=>js('!!document.querySelector(".result")'),'search results');await click('.result');
+  await until(()=>js('!!document.querySelector(".result")'),'search results');
+  await until(()=>js('document.querySelector(".result .series-cover").complete&&document.querySelector(".result .series-cover").naturalWidth>0'),'search thumbnail rendered before library download');
+  assert((await js('document.querySelector(".result .series-cover").currentSrc')).includes('/api/cover-image?'),'search uses source artwork instead of logo fallback');
+  assert(!fs.existsSync(path.join(settings.downloadRoot,series.title,'coverart.png')),'search thumbnail needs no saved cover');
+  await click('.result');
   await until(()=>js('document.querySelectorAll(".chapters tbody tr").length===100'),'long chapter list');allowAll=false;
   window.setSize(390,844);await delay(250);allowAll=true;
   assert(await js('document.documentElement.scrollWidth<=innerWidth'),'mobile discover has no horizontal overflow');
@@ -53,6 +57,12 @@ app.whenReady().then(async()=>{
   await until(()=>fs.existsSync(path.join(settings.downloadRoot,series.title,'coverart.png')),'cover saved beside chapters');
   await until(()=>js('!document.querySelector(".series-heading button").disabled'),'cover action complete');
   await until(()=>js('document.querySelector(".series-heading .series-cover").complete&&document.querySelector(".series-heading .series-cover").naturalWidth>0'),'series cover rendered');assert((await js('document.querySelector(".series-heading .series-cover").currentSrc')).includes('/api/cover-image?'));
+  coverOffline=true;window.setSize(390,844);await delay(200);
+  await js('const cover=document.querySelector(".series-heading .series-cover");cover.src=cover.src+"&saved-cover-check=1"');
+  await until(()=>js('document.querySelector(".series-heading .series-cover").complete&&document.querySelector(".series-heading .series-cover").naturalWidth>0'),'saved cover loads with source offline');
+  assert((await js('document.querySelector(".series-heading .series-cover").currentSrc')).includes('/api/cover-image?'),'mobile uses actual saved artwork instead of logo fallback');
+  assert(await js('document.querySelector(".series-heading .series-cover").getBoundingClientRect().width>0'),'mobile cover is visible');
+  window.setSize(1000,800);await delay(200);
   assert.equal(await js('getComputedStyle(document.querySelector("button.primary")).backgroundColor'),'rgb(167, 71, 11)');
   // Click deep in a long table. The old inline confirmation was below the entire list.
   await js('const row=document.querySelectorAll(".chapters tbody tr")[50];row.scrollIntoView({block:"center"});row.querySelector("button").click()');

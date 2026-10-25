@@ -152,7 +152,15 @@ export function useDashboard() {
                 follows.value = await api('follows');
             if (chapters.value && detail.value && view.value === 'search') {
                 const snapshot = chapters.value;
-                const local = await api<Record<string, string>>('chapter-status', { source: detail.value.source, ids: snapshot.items.map(c => c.id) });
+                const local: Record<string, string> = {};
+                const sources = new Set(snapshot.items.map(c => c.localSource ?? c.source));
+                for (const source of sources) {
+                    const items = snapshot.items.filter(c => (c.localSource ?? c.source) === source);
+                    const states = await api<Record<string, string>>('chapter-status', { source, ids: items.map(c => c.localChapterId ?? c.id) });
+                    for (const c of items)
+                        if (states[c.localChapterId ?? c.id])
+                            local[c.id] = states[c.localChapterId ?? c.id];
+                }
                 if (detail.value)
                     detail.value.library = await api(`library-status?source=${detail.value.source}&id=${encodeURIComponent(detail.value.id)}&total=${seriesTotal.value}`);
                 if (chapters.value === snapshot)
@@ -202,6 +210,7 @@ export function useDashboard() {
     async function search(at = 0) {
         await perform(async () => {
             savePreferences();
+            coverRevision.value++;
             results.value = await api(`search?source=${selectedSource.value}&q=${encodeURIComponent(query.value)}&offset=${at}`);
             detail.value = undefined;
         });
@@ -398,11 +407,13 @@ export function useDashboard() {
             await refresh();
         });
     }
+    const coverRevision = ref(0);
     async function downloadCover() {
         if (!detail.value)
             return;
         await perform(async () => {
             await api('cover', { source: detail.value!.source, id: detail.value!.id });
+            coverRevision.value++;
             message.value = 'Saved coverart.png in the series download folder.';
         });
     }
@@ -513,7 +524,7 @@ export function useDashboard() {
         document.removeEventListener('visibilitychange', visibility);
     });
     return {
-        allSelected, excluded, seriesTotal, selectedCount, isSelected, toggleChapter, selectPage, selectAll, deselectAll, prepareSelected, chapterAction, authenticated, setupRequired, password, busy, error, message, view, selectedSource, language, group, query, results, detail, chapters, selected, knownGroups, sources, jobs, counts, holds, paused, total, offset, pageSize, librarySearch, sourceFilter, statusFilter, follows, enabledSources, activeCount, remainingCount, sourceGroups, preview, previewLoading, previewError, confirmTranslations, downloadDialog, perform, refresh, login, logout, search, loadChapters, openSeries, prepare, cancelPreview, enqueue, control, groupControl, allControl, deleteDownloads, clearFailed, retrySource, verify, downloadAgain, downloadCover, followSeries, saveFollow, checkFollow, removeFollow, page, applyLibraryFilters
+        coverRevision, allSelected, excluded, seriesTotal, selectedCount, isSelected, toggleChapter, selectPage, selectAll, deselectAll, prepareSelected, chapterAction, authenticated, setupRequired, password, busy, error, message, view, selectedSource, language, group, query, results, detail, chapters, selected, knownGroups, sources, jobs, counts, holds, paused, total, offset, pageSize, librarySearch, sourceFilter, statusFilter, follows, enabledSources, activeCount, remainingCount, sourceGroups, preview, previewLoading, previewError, confirmTranslations, downloadDialog, perform, refresh, login, logout, search, loadChapters, openSeries, prepare, cancelPreview, enqueue, control, groupControl, allControl, deleteDownloads, clearFailed, retrySource, verify, downloadAgain, downloadCover, followSeries, saveFollow, checkFollow, removeFollow, page, applyLibraryFilters
     };
 }
 export type DashboardModel = UnwrapNestedRefs<ReturnType<typeof useDashboard>>;

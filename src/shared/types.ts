@@ -30,6 +30,8 @@ export interface Chapter {
     external: boolean;
     localState?: string;
     localJobId?: string;
+    localSource?: string;
+    localChapterId?: string;
 }
 export interface PageResult<T> {
     items: T[];

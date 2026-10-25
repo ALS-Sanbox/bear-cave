@@ -22,8 +22,14 @@ export async function matching(adapter: SourceAdapter, seriesId: string, filter:
         throw Error('Some selected chapters are unavailable. Refresh the chapter list.');
     return unique;
 }
-export function selectionSummary(store: Store, source: string, chapters: Chapter[]) {
-    const existing = store.chapterJobs(source, chapters.map(c => c.id)), fresh = chapters.filter(c => !existing[c.id] || existing[c.id].state === 'completed' && existing[c.id].verification?.state === 'missing');
+export function selectionSummary(store: Store, source: string, chapters: Chapter[], root?: string) {
+    const existing = store.chapterJobs(source, chapters.map(c => c.id));
+    for (const c of chapters) {
+        const peer = store.equivalentChapter(c, root);
+        if (peer)
+            existing[c.id] = peer;
+    }
+    const fresh = chapters.filter(c => !existing[c.id] || existing[c.id].state === 'completed' && existing[c.id].verification?.state === 'missing');
     let multipleTranslations = 0;
     const logical = new Set<string>();
     // Existing translations also count: adding another group must never happen silently.
@@ -42,7 +48,7 @@ export function selectionSummary(store: Store, source: string, chapters: Chapter
 export function enqueueSelection(store: Store, series: Series, chapters: Chapter[], settings: import('../shared/types.js').Settings, confirmTranslations: boolean) {
     store.db.exec('BEGIN IMMEDIATE');
     try {
-        const summary = selectionSummary(store, series.source, chapters);
+        const summary = selectionSummary(store, series.source, chapters, settings.downloadRoot);
         if (summary.multipleTranslations && !confirmTranslations)
             throw Error('Additional translations now require confirmation. Preview again or choose one group.');
         let added = 0, duplicates = 0;

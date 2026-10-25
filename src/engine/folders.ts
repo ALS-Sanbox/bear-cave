@@ -1,18 +1,48 @@
 import path from 'node:path';
-import { mkdir, readdir, readFile, writeFile, lstat, realpath } from 'node:fs/promises';
+import { mkdir, readdir, readFile, writeFile, lstat, realpath, rename } from 'node:fs/promises';
 import { safeName, contained, digest, noLink } from './files.js';
 import type { Store } from '../core/store.js';
 import { SourceError, type Series } from '../shared/types.js';
-async function markerData(file: string) {
+export async function markerData(file: string) {
     await noLink(file);
     if ((await lstat(file)).size > 16384)
         throw Error('Series marker exceeds size limit');
     return JSON.parse(await readFile(file, 'utf8'));
 }
+export function markerHasIdentity(marker: any, identity: string): boolean {
+    return marker?.identity === identity || Array.isArray(marker?.identities) && marker.identities.includes(identity);
+}
+export const titleKey = (title: string) => title.normalize('NFKC').trim().replace(/\s+/g, ' ').toLocaleLowerCase('en-US');
+export async function addSeriesIdentity(dir: string, identity: string, title: string) {
+    const file = contained(dir, '.bear-cave-series.json'), marker = await markerData(file);
+    if (markerHasIdentity(marker, identity))
+        return;
+    const identities = [...new Set<string>([marker.identity, ...(marker.identities ?? []), identity])];
+    const temp = contained(dir, '.series-marker.part');
+    await noLink(temp);
+    await writeFile(temp, JSON.stringify({
+        ...marker, version: 2, identities, title: marker.title || title
+    }));
+    await rename(temp, file);
+}
+const directoryLocks = new Map<string, Promise<unknown>>();
+export async function withDirectoryLock<T>(root: string, work: () => Promise<T>): Promise<T> {
+    const key = path.resolve(root).toLowerCase(), previous = directoryLocks.get(key) ?? Promise.resolve();
+    const pending = previous.catch(() => {
+    }).then(work);
+    directoryLocks.set(key, pending);
+    try {
+        return await pending;
+    }
+    finally {
+        if (directoryLocks.get(key) === pending)
+            directoryLocks.delete(key);
+    }
+}
 async function claimSeries(dir: string, identity: string, title: string) {
     const file = contained(dir, '.bear-cave-series.json');
     try {
-        return (await markerData(file)).identity === identity;
+        return markerHasIdentity(await markerData(file), identity);
     }
     catch (e) {
         if ((e as NodeJS.ErrnoException).code !== 'ENOENT')
@@ -27,7 +57,7 @@ async function claimSeries(dir: string, identity: string, title: string) {
     catch (e) {
         if ((e as NodeJS.ErrnoException).code !== 'EEXIST')
             throw e;
-        return (await markerData(file)).identity === identity;
+        return markerHasIdentity(await markerData(file), identity);
     }
 }
 export async function checkPath(root: string, file: string) {
@@ -39,7 +69,10 @@ export async function checkPath(root: string, file: string) {
         await noLink(current);
     }
 }
-export async function seriesDirectory(root: string, series: Series, store?: Store) {
+export async function seriesDirectory(root: string, series: Series, store?: Store): Promise<string> {
+    return withDirectoryLock(root, () => resolveSeriesDirectory(root, series, store));
+}
+async function resolveSeriesDirectory(root: string, series: Series, store?: Store) {
     root = await realpath(root);
     const identity = `${series.source}:${series.id}`, known = store?.folder(root, identity);
     if (known) {
@@ -70,10 +103,13 @@ export async function seriesDirectory(root: string, series: Series, store?: Stor
         const dir = contained(root, entry.name);
         try {
             await checkPath(root, dir);
-            if ((await markerData(contained(dir, '.bear-cave-series.json'))).identity !== identity)
-                continue;
-            if (store?.folderConflict(dir, series.source, series.id))
-                continue;
+            const marker = await markerData(contained(dir, '.bear-cave-series.json'));
+            const identities: string[] = [marker.identity, ...(marker.identities ?? [])];
+            if (!markerHasIdentity(marker, identity)) {
+                if (!store || typeof marker.title !== 'string' || titleKey(marker.title) !== titleKey(series.title) || identities.some(id => id.startsWith(`${series.source}:`)))
+                    continue;
+                await addSeriesIdentity(dir, identity, series.title);
+            }
             store?.claimFolder(root, identity, entry.name);
             return dir;
         }
@@ -88,7 +124,7 @@ export async function seriesDirectory(root: string, series: Series, store?: Stor
         if (existing) {
             try {
                 await noLink(marker);
-                if ((await markerData(marker)).identity !== identity)
+                if (!markerHasIdentity(await markerData(marker), identity))
                     continue;
             }
             catch {
@@ -138,7 +174,7 @@ export async function seriesDirectory(root: string, series: Series, store?: Stor
         catch (e) {
             if ((e as NodeJS.ErrnoException).code !== 'EEXIST')
                 throw e;
-            if ((await markerData(marker)).identity !== identity)
+            if (!markerHasIdentity(await markerData(marker), identity))
                 continue;
         }
         if (store)

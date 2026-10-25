@@ -14,6 +14,8 @@ export interface PageRecord {
 export interface Manifest {
     version: 1 | 2;
     chapter: string;
+    source?: string;
+    series?: string;
     revision: string;
     identities?: string[];
     finalName?: string;

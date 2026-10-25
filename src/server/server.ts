@@ -11,7 +11,7 @@ import type { Settings, Chapter, Series } from '../shared/types.js';
 import { SourceError } from '../shared/types.js';
 import { Auth } from './auth.js';
 import { saveCover } from '../engine/files.js';
-import { CoverCache } from './covers.js';
+import { CoverCache, readLibraryCover } from './covers.js';
 import { FollowScheduler } from '../engine/follows.js';
 import { verifyOutput, redownload } from '../engine/verification.js';
 import { matching, selectionSummary, enqueueSelection } from '../engine/selection.js';
@@ -41,7 +41,7 @@ export function createDashboard(store: Store, queue: Queue, registry: Registry, 
     const auth = new Auth(store), previews = new Map<string, Preview>();
     let busyPreviews = 0;
     let reads: number[] = [];
-    const covers = new CoverCache(registry), follows = new FollowScheduler(store, registry, queue, settings);
+    const covers = new CoverCache(registry, (source, id) => readLibraryCover(store, settings().downloadRoot, source, id)), follows = new FollowScheduler(store, registry, queue, settings);
     const verifyingJobs = new Set<string>();
     let verifying = 0, closing = false;
     const requests = new Set<AbortController>(), tasks = new Set<Promise<void>>();
@@ -49,7 +49,7 @@ export function createDashboard(store: Store, queue: Queue, registry: Registry, 
         for (const [id, p] of previews)
             if (p.expires < Date.now() || p.session === session)
                 previews.delete(id);
-        const summary = selectionSummary(store, series.source, chapters), token = randomBytes(24).toString('hex');
+        const summary = selectionSummary(store, series.source, chapters, settings().downloadRoot), token = randomBytes(24).toString('hex');
         previews.set(token, {
             session, series, chapters, format, multipleTranslations: summary.multipleTranslations, expires: Date.now() + 300000
         });
@@ -166,11 +166,19 @@ export function createDashboard(store: Store, queue: Queue, registry: Registry, 
                     const source = z.string().max(30).parse(url.searchParams.get('source')), id = opaqueId.parse(url.searchParams.get('id'));
                     registry.get(source);
                     const total = z.coerce.number().int().min(0).max(10000).parse(url.searchParams.get('total') ?? 0);
-                    return send(res, 200, libraryStatus(store, { source, id } as Series, total));
+                    return send(res, 200, libraryStatus(store, { source, id } as Series, total, s.downloadRoot));
                 }
                 if (method === 'POST' && url.pathname === '/api/chapter-status') {
                     const data = z.object({ source: z.string().max(30), ids: z.array(opaqueId).max(100) }).strict().parse(await body(req));
                     const jobs = store.chapterJobs(data.source, data.ids);
+                    for (const id of data.ids) {
+                        const job = jobs[id];
+                        if (job) {
+                            const peer = store.equivalentChapter(job.chapter, s.downloadRoot);
+                            if (peer)
+                                jobs[id] = peer;
+                        }
+                    }
                     return send(res, 200, Object.fromEntries(Object.entries(jobs).map(([id, j]) => [id, j.verification && ['missing', 'damaged'].includes(j.verification.state) ? j.verification.state : j.state])));
                 }
                 if (method === 'GET' && url.pathname === '/api/cover-image') {
@@ -304,12 +312,17 @@ export function createDashboard(store: Store, queue: Queue, registry: Registry, 
                         await reconcile(store, series, all, s, abort.signal);
                         if (store.seriesJobs(series.source, series.id).length)
                             await syncSeries(store, adapter, series, s.downloadRoot, abort.signal, all.length).catch(e => console.warn('Metadata:', (e as Error).message));
-                        return send(res, 200, { ...publicSeries(series), library: libraryStatus(store, series, all.length) });
+                        return send(res, 200, { ...publicSeries(series), library: libraryStatus(store, series, all.length, s.downloadRoot) });
                     }
                     const page = await adapter.chapters(id, { language: url.searchParams.get('language') ?? 'en', group: url.searchParams.get('group') || undefined }, offset, abort.signal);
                     const local = store.chapterJobs(adapter.manifest.id, page.items.map(c => c.id));
+                    for (const c of page.items) {
+                        const peer = store.equivalentChapter(c, s.downloadRoot);
+                        if (peer)
+                            local[c.id] = peer;
+                    }
                     return send(res, 200, { ...page, items: page.items.map(c => ({
-                            ...c, localJobId: local[c.id]?.id, localState: local[c.id]?.verification && ['missing', 'damaged'].includes(local[c.id].verification!.state) ? local[c.id].verification!.state : local[c.id]?.state ?? 'not_downloaded'
+                            ...c, localChapterId: local[c.id]?.chapter.id, localSource: local[c.id]?.source, localJobId: local[c.id]?.id, localState: local[c.id]?.verification && ['missing', 'damaged'].includes(local[c.id].verification!.state) ? local[c.id].verification!.state : local[c.id]?.state ?? 'not_downloaded'
                         })) });
                 }
                 if (method === 'POST' && url.pathname === '/api/preview') {

@@ -1,3 +1,4 @@
+import { sameChapter } from '../shared/chapters.js';
 import { DatabaseSync } from 'node:sqlite';
 import { randomUUID } from 'node:crypto';
 import { existsSync } from 'node:fs';
@@ -45,6 +46,17 @@ export class Store {
               END;
               PRAGMA user_version=2;COMMIT;`);
         }
+        if (version < 3) {
+            if (file !== ':memory:' && !existsSync(`${file}.pre-v3.bak`))
+                this.db.prepare('VACUUM INTO ?').run(`${file}.pre-v3.bak`);
+            this.db.exec(`BEGIN IMMEDIATE;
+                ALTER TABLE folders RENAME TO folders_v2;
+                CREATE TABLE folders(root TEXT NOT NULL,identity TEXT NOT NULL,folder TEXT NOT NULL COLLATE NOCASE,PRIMARY KEY(root,identity));
+                INSERT INTO folders SELECT * FROM folders_v2;
+                DROP TABLE folders_v2;
+                CREATE INDEX folders_directory ON folders(root,folder);
+                PRAGMA user_version=3; COMMIT;`);
+        }
         for (const j of this.states('running'))
             this.update(j.id, { state: 'queued', error: 'Recovered after interrupted shutdown.' });
     }
@@ -62,7 +74,9 @@ export class Store {
         const r = this.db.prepare('SELECT data FROM jobs WHERE id=?').get(id);
         return r ? JSON.parse(String(r.data)) : undefined;
     }
-    enqueue(series: Series, chapter: Chapter, settings: Settings): {
+    enqueue(series: Series, chapter: Chapter, settings: Settings, options: {
+        importOutput?: boolean;
+    } = {}): {
         job: Job;
         duplicate: boolean;
     } {
@@ -73,6 +87,9 @@ export class Store {
         series = {
             ...series, coverRef: undefined, title: series.title.slice(0, 300), description: series.description.slice(0, 4000)
         };
+        const peer = !options.importOutput && this.equivalentChapter(chapter, settings.downloadRoot);
+        if (peer)
+            return { job: peer, duplicate: true };
         const existing = this.db.prepare('SELECT data FROM jobs WHERE source=? AND chapter_id=?').get(chapter.source, chapter.id);
         if (existing) {
             const job = JSON.parse(String(existing.data)) as Job;
@@ -186,6 +203,36 @@ export class Store {
     }
     seriesJobs(source: string, id: string, includeCompleted = true): Job[] {
         return this.db.prepare(`SELECT data FROM jobs WHERE source=? AND series_id=? ${includeCompleted ? '' : "AND state!='completed'"} ORDER BY rowid`).all(source, id).map(r => JSON.parse(String(r.data)));
+    }
+    libraryJobs(source: string, id: string, root?: string): Job[] {
+        const own = this.seriesJobs(source, id);
+        root ??= own[0]?.root;
+        if (!root)
+            return own;
+        const folder = this.folder(root, `${source}:${id}`);
+        if (!folder)
+            return own.filter(j => path.resolve(j.root) === path.resolve(root));
+        return this.db.prepare(`SELECT j.data FROM jobs j JOIN folders f ON f.identity=j.source||':'||j.series_id
+            WHERE f.root=? AND f.folder=? AND json_extract(j.data,'$.root')=? ORDER BY j.state='completed' DESC,j.rowid`).all(root, folder, root).map(r => JSON.parse(String(r.data)) as Job);
+    }
+    equivalentChapter(chapter: Chapter, root?: string): Job | undefined {
+        if (!/^\d+(?:\.\d+)?$/.test(chapter.number))
+            return;
+        root ??= this.db.prepare("SELECT json_extract(data,'$.root') AS root FROM jobs WHERE source=? AND series_id=? LIMIT 1").get(chapter.source, chapter.seriesId)?.root as string | undefined;
+        if (!root)
+            return;
+        const folder = this.folder(root, `${chapter.source}:${chapter.seriesId}`);
+        if (!folder)
+            return;
+        const rows = this.db.prepare(`SELECT j.data FROM jobs j JOIN folders f ON f.identity=j.source||':'||j.series_id
+            WHERE f.root=? AND f.folder=? AND j.source!=? AND json_extract(j.data,'$.root')=?
+            AND json_extract(j.data,'$.chapter.language')=? AND CAST(json_extract(j.data,'$.chapter.number') AS REAL)=?
+            AND (j.state IN ('queued','running','paused') OR j.state='completed' AND json_extract(j.data,'$.verification.state')='verified') ORDER BY j.state='completed' DESC,j.rowid`)
+            .all(root, folder, chapter.source, root, chapter.language, Number(chapter.number));
+        return rows.map(r => JSON.parse(String(r.data)) as Job).find(j => sameChapter(j.chapter, chapter));
+    }
+    mapFolder(root: string, identity: string, folder: string) {
+        this.db.prepare('INSERT INTO folders VALUES(?,?,?) ON CONFLICT(root,identity) DO UPDATE SET folder=excluded.folder').run(root, identity, folder);
     }
     legacyOutput(source: string, id: string, root: string): Job | undefined {
         const row = this.db.prepare("SELECT data FROM jobs WHERE source=? AND series_id=? AND json_extract(data,'$.root')=? AND json_extract(data,'$.output') IS NOT NULL LIMIT 1").get(source, id, root);

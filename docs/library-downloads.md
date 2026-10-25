@@ -32,3 +32,5 @@ Modified files:
 - Documentation: `README.md`, `docs/source-status.md`; added this `docs/library-downloads.md` report.
 
 No dependencies were added. Tray architecture, authentication, source sessions, queue uniqueness and existing library files are preserved. The root causes, detection rules, safe replacement procedure and remaining ToonGod limitation are described above.
+
+Cross-source folder mapping and startup consolidation now extend these rules: see [shared series folders](shared-series-folders.md). Exact recorded titles may share a folder; chapter IDs and original sources remain distinct.

@@ -1,3 +1,4 @@
+import { reconcile } from './library.js';
 import { randomUUID } from 'node:crypto';
 import type { Store } from '../core/store.js';
 import type { Registry } from '../sources/registry.js';
@@ -61,7 +62,8 @@ export class FollowScheduler {
                 if (hold)
                     throw Error(hold);
             });
-            const summary = selectionSummary(this.store, follow.series.source, chapters);
+            await reconcile(this.store, follow.series, chapters, this.settings(), controller.signal);
+            const summary = selectionSummary(this.store, follow.series.source, chapters, this.settings().downloadRoot);
             const next: FollowedSeries = {
                 ...follow, failures: 0, lastCheck, lastSuccess: lastCheck, nextCheck: new Date(this.now() + follow.intervalHours * 3600000).toISOString(), missing: summary.count, translations: summary.multipleTranslations, error: undefined
             };

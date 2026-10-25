@@ -130,11 +130,11 @@ export class ChapterOutput {
         }
         if (!this.manifest || ![1, 2].includes(this.manifest.version) || this.manifest.chapter !== this.job.chapter.id || this.manifest.revision !== revision || !Array.isArray(this.manifest.pages) || this.manifest.pages.length !== count || this.manifest.version === 2 && JSON.stringify(this.manifest.identities) !== JSON.stringify(identities))
             this.manifest = {
-                version: 2, chapter: this.job.chapter.id, revision, identities, pages: Array.from({ length: count }, () => null)
+                version: 2, chapter: this.job.chapter.id, source: this.job.source, series: this.job.series.id, revision, identities, pages: Array.from({ length: count }, () => null)
             };
         else
             this.manifest = {
-                ...this.manifest, version: 2, identities
+                ...this.manifest, version: 2, identities, source: this.job.source, series: this.job.series.id
             };
         this.manifest.finalName = path.basename(this.final);
         await this.save();
@@ -171,7 +171,7 @@ export class ChapterOutput {
             await noLink(metadata);
             saved = validManifest(JSON.parse(await readFile(metadata, 'utf8')));
         }
-        if (saved.chapter !== this.job.chapter.id)
+        if (saved.chapter !== this.job.chapter.id || saved.source && saved.source !== this.job.source || saved.series && saved.series !== this.job.series.id)
             throw Error('Existing output belongs to another chapter; it has been kept.');
         signal?.throwIfAborted();
         return { file: this.final, count: saved.pages.length };

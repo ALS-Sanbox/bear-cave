@@ -22,7 +22,7 @@ const languages = languageOptions;
   <template v-if="model.detail">
     <button class="subtle back" @click="model.detail=undefined;model.preview=undefined">Back to results</button>
     <div class="series-heading card">
-      <CoverImage :source="model.detail.source" :id="model.detail.id" :title="model.detail.title"/>
+      <CoverImage :source="model.detail.source" :id="model.detail.id" :title="model.detail.title" :revision="model.coverRevision" eager/>
       <div>
         <p class="eyebrow">{{model.detail.source}}</p>
         <h2>{{model.detail.title}}</h2>
@@ -93,7 +93,10 @@ const languages = languageOptions;
                 {{languageName(chapter.language)}}
                 <span>{{chapter.groups.map(g=>g.name).join(', ')||'No group listed'}}</span>
               </td>
-              <td>{{statusLabels[chapter.localState??'not_downloaded']}}</td>
+              <td>
+                {{statusLabels[chapter.localState??'not_downloaded']}}
+                <small v-if="chapter.localSource && chapter.localSource!==chapter.source">From {{chapter.localSource}}</small>
+              </td>
               <td>{{chapter.pages??'On resolution'}}</td>
               <td>
                 <button v-if="chapter.localState!=='completed'" :disabled="model.busy" @click="model.prepare([chapter.id])">Download</button>
@@ -118,7 +121,7 @@ const languages = languageOptions;
     <div v-if="!model.results.items.length" class="empty card">No matching titles.</div>
     <div class="result-grid">
       <button v-for="series in model.results.items" :key="series.id" class="result card" :disabled="model.busy" @click="model.openSeries(series)">
-        <CoverImage :source="series.source" :id="series.id" :title="series.title"/>
+        <CoverImage :source="series.source" :id="series.id" :title="series.title" :revision="model.coverRevision"/>
         <div>
           <p class="eyebrow">{{series.source}}</p>
           <h2>{{series.title}}</h2>

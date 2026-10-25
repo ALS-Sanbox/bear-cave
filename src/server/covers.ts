@@ -2,7 +2,42 @@ import sharp from 'sharp';
 import type { Registry } from '../sources/registry.js';
 import type { Series } from '../shared/types.js';
 import { setTimeout as delay } from 'node:timers/promises';
-import { imageExtension } from '../engine/files.js';
+import { readFile, lstat, realpath } from 'node:fs/promises';
+import type { Store } from '../core/store.js';
+import { checkPath, markerHasIdentity } from '../engine/folders.js';
+import { contained, digest, imageExtension } from '../engine/files.js';
+// Read only identity-mapped library files; browsing a cover must not create folders.
+export async function readLibraryCover(store: Store, root: string, source: string, id: string) {
+    try {
+        root = await realpath(root);
+        const folder = store.folder(root, `${source}:${id}`);
+        if (!folder)
+            return;
+        const dir = contained(root, folder);
+        await checkPath(root, dir);
+        const marker = contained(dir, '.bear-cave-series.json');
+        await checkPath(root, marker);
+        if ((await lstat(marker)).size > 16384 || !markerHasIdentity(JSON.parse(await readFile(marker, 'utf8')), `${source}:${id}`))
+            return;
+        const file = contained(dir, 'coverart.png');
+        await checkPath(root, file);
+        const info = await lstat(file);
+        if (!info.isFile() || info.size > 32 * 1024 * 1024)
+            return;
+        return await readFile(file);
+    }
+    catch {
+        return;
+    }
+}
+async function thumbnail(data: Uint8Array) {
+    if (data.byteLength > 32 * 1024 * 1024)
+        throw Error('Cover too large');
+    imageExtension(data);
+    return sharp(Buffer.from(data), { limitInputPixels: 40000000 }).rotate().resize({
+        width: 240, height: 360, fit: 'inside', withoutEnlargement: true
+    }).png().toBuffer();
+}
 export class CoverCache {
     private references = new Map<string, string>();
     private cache = new Map<string, {
@@ -13,19 +48,24 @@ export class CoverCache {
     private bytes = 0;
     private active = 0;
     private shutdown = new AbortController();
-    constructor(private registry: Registry) {
+    constructor(private registry: Registry, private localCover?: (source: string, id: string) => Promise<Uint8Array | undefined>) {
     }
     remember(series: Series) {
         if (typeof series.coverRef === 'string' && series.coverRef.length <= 4096) {
             const key = `${series.source}:${series.id}`;
             this.references.set(key, series.coverRef);
+            if (!this.cache.get(key)?.bytes)
+                this.cache.delete(key);
             if (this.references.size > 1000)
                 this.references.delete(this.references.keys().next().value!);
         }
     }
     async get(source: string, id: string) {
         this.shutdown.signal.throwIfAborted();
-        const key = `${source}:${id}`, old = this.cache.get(key);
+        const referenceKey = `${source}:${id}`;
+        const local = await this.localCover?.(source, id).catch(() => undefined);
+        this.shutdown.signal.throwIfAborted();
+        const key = local ? `${referenceKey}:${digest(local)}` : referenceKey, old = this.cache.get(key);
         if (old && old.expires > Date.now()) {
             if (!old.bytes)
                 throw Error('Cover unavailable');
@@ -43,20 +83,37 @@ export class CoverCache {
                     await delay(25, undefined, { signal });
                 this.active++;
                 acquired = true;
-                const adapter = this.registry.get(source);
-                if (!adapter.cover)
-                    throw Error('Cover unavailable');
-                const data = await adapter.cover(id, signal, this.references.get(key));
-                if (data.byteLength > 32 * 1024 * 1024)
-                    throw Error('Cover too large');
-                imageExtension(data);
-                const bytes = await sharp(Buffer.from(data), { limitInputPixels: 40000000 }).rotate().resize({
-                    width: 240, height: 360, fit: 'inside', withoutEnlargement: true
-                }).png().toBuffer();
+                let bytes: Buffer | undefined;
+                if (local) {
+                    try {
+                        bytes = await thumbnail(local);
+                    }
+                    catch { /* A corrupt saved cover may be refreshed from the source. */
+                    }
+                }
+                if (!bytes) {
+                    const adapter = this.registry.get(source);
+                    if (!adapter.cover)
+                        throw Error('Cover unavailable');
+                    const reference = this.references.get(referenceKey);
+                    try {
+                        bytes = await thumbnail(await adapter.cover(id, signal, reference));
+                    }
+                    catch (e) {
+                        signal.throwIfAborted();
+                        if (!reference)
+                            throw e;
+                        // Search listings may advertise expired URLs or placeholder images.
+                        // Resolve current artwork exactly as the explicit download action does.
+                        this.references.delete(referenceKey);
+                        bytes = await thumbnail(await adapter.cover(id, signal));
+                    }
+                }
                 this.put(key, bytes, Date.now() + 10 * 60000);
                 return bytes;
             }
-            catch {
+            catch (e) {
+                console.warn(`Cover thumbnail unavailable (${source}:${id}):`, (e as Error).message);
                 this.put(key, undefined, Date.now() + 60000);
                 throw Error('Cover unavailable');
             }

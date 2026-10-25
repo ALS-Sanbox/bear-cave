@@ -48,7 +48,7 @@ export async function verifyOutput(job: Job, signal?: AbortSignal): Promise<NonN
         }
         else
             m = await verifyArchive(job.output, undefined, signal);
-        if (m.chapter !== job.chapter.id)
+        if (m.chapter !== job.chapter.id || m.source && m.source !== job.source || m.series && m.series !== job.series.id)
             throw Error('Output belongs to another chapter');
     }
     catch (e) {
