@@ -1,7 +1,7 @@
 import { BrowserWindow, type Session } from 'electron';
 import { setTimeout as delay } from 'node:timers/promises';
 import { SourceError } from '../shared/types.js';
-export type RenderMode = 'browse' | 'series' | 'chapters' | 'reader';
+export type RenderMode = 'browse' | 'series' | 'chapters' | 'reader' | 'document';
 // Reads ordinary rendered site content. A challenge stops the request for local human interaction.
 export async function renderSource(partition: Session, url: string, mode: RenderMode, signal: AbortSignal | undefined, register: (window: BrowserWindow) => void, existing?: BrowserWindow, reuseDocument = false) {
     const deadline = AbortSignal.any([AbortSignal.timeout(mode === 'browse' ? 30000 : 180000), ...(signal ? [signal] : [])]);
@@ -21,7 +21,9 @@ export async function renderSource(partition: Session, url: string, mode: Render
     deadline.addEventListener('abort', stop, { once: true });
     let navigationError: Error | undefined;
     let committed = reuseDocument;
-    const navigated = () => { committed = true; };
+    const navigated = () => {
+        committed = true;
+    };
     if (!reuseDocument)
         window.webContents.once('did-navigate', navigated);
     if (!reuseDocument)
@@ -32,7 +34,7 @@ export async function renderSource(partition: Session, url: string, mode: Render
     async function evaluate<T>(script: string): Promise<T> {
         deadline.throwIfAborted();
         if (navigationError)
-            throw new SourceError('Comix browser navigation failed. Open its local source window and retry.', 'action_required');
+            throw new SourceError('Source browser navigation failed. Open its local source window and retry.', 'action_required');
         if (!committed)
             throw Error('Waiting for the new source document.');
         return window.webContents.executeJavaScript(script, true);
@@ -47,7 +49,7 @@ export async function renderSource(partition: Session, url: string, mode: Render
                     value: T;
                 }>(`(()=>({challenge:/just a moment|attention required/i.test(document.title)||!!document.querySelector('form#challenge-form'),value:(${script})}))()`);
                 if (state.challenge)
-                    throw new SourceError('Comix needs human verification. Open its local source window, complete the check, then retry.', 'action_required');
+                    throw new SourceError('Source needs human verification. Open its local source window, complete the check, then retry.', 'action_required');
                 if (state.value)
                     return state.value;
             }
@@ -58,9 +60,13 @@ export async function renderSource(partition: Session, url: string, mode: Render
             }
             await delay(150, undefined, { signal: deadline });
         }
-        throw new SourceError('Comix did not finish loading this page. Open its local source window and check for a challenge or site error.', 'action_required');
+        throw new SourceError('Source did not finish loading this page. Open its local source window and check for a challenge or site error.', 'action_required');
     }
     try {
+        if (mode === 'document') {
+            await wait(`document.readyState === 'complete' && document.body?.innerText?.trim() && !/checking your browser|enable javascript and cookies/i.test(document.body.innerText)`);
+            return await evaluate<string>('document.documentElement.outerHTML');
+        }
         if (mode === 'browse') {
             await wait(`document.querySelector('a[href^="/title/"]') || /0 items|no results|no titles|nothing found/i.test(document.body?.innerText || '')`);
             await delay(350, undefined, { signal: deadline });

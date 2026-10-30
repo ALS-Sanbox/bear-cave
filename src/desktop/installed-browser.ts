@@ -20,7 +20,8 @@ export async function findInstalledBrowser() {
             await access(candidate);
             return candidate;
         }
-        catch { /* Try the next normal installation location. */ }
+        catch { /* Try the next normal installation location. */
+        }
     }
     throw new SourceError('Install Chrome or Microsoft Edge to use the installed-browser source connection.', 'action_required');
 }
@@ -34,10 +35,22 @@ export async function launchInstalledBrowser(profile: string): Promise<OwnedBrow
     const child: ChildProcess = spawn(executable, ['--user-data-dir=' + path.resolve(profile), '--remote-debugging-pipe', '--no-first-run', '--no-default-browser-check', '--disable-extensions', '--new-window', 'about:blank'], { windowsHide: true, stdio: ['ignore', 'ignore', 'ignore', 'pipe', 'pipe'] });
     const client = new CdpPipe(child.stdio[3] as Writable, child.stdio[4] as Readable);
     let exited = false;
-    const exit = new Promise<void>(resolve => { child.once('exit', () => { exited = true; client.close(); resolve(); }); child.once('error', () => { exited = true; client.close(); resolve(); }); });
+    const exit = new Promise<void>(resolve => {
+        child.once('exit', () => {
+            exited = true;
+            client.close();
+            resolve();
+        });
+        child.once('error', () => {
+            exited = true;
+            client.close();
+            resolve();
+        });
+    });
     const stop = async () => {
         if (!exited)
-            await Promise.race([client.send('Browser.close').catch(() => { }), delay(1000)]);
+            await Promise.race([client.send('Browser.close').catch(() => {
+                }), delay(1000)]);
         if (!exited)
             await Promise.race([exit, delay(4000)]);
         if (!exited) {
@@ -89,8 +102,10 @@ export class InstalledBrowser {
         launch?: (profile: string) => Promise<OwnedBrowser>;
         guard?: (url: URL) => Promise<void>;
         attention?: () => void;
+        sourceHosts?: string[];
+        generic?: boolean;
     } = {}) {
-        this.sourceHosts = ['www.toongod.org', 'toongod.org'];
+        this.sourceHosts = options.sourceHosts ?? ['www.toongod.org', 'toongod.org'];
         this.allowed = new Set([...this.sourceHosts, ...imageHosts, 'challenges.cloudflare.com', '*.challenges.cloudflare.com', 'cdnjs.cloudflare.com', 'cdn.jsdelivr.net', 'fonts.googleapis.com', 'fonts.gstatic.com']);
     }
     private async guard(input: string, hosts = [...this.allowed]) {
@@ -118,7 +133,7 @@ export class InstalledBrowser {
                     this.stopped.signal.throwIfAborted();
                 }
                 this.owned = owned;
-            this.pendingNavigation = '';
+                this.pendingNavigation = '';
                 const { client } = owned;
                 const created = await client.send('Target.createTarget', { url: 'about:blank' });
                 this.target = created.targetId;
@@ -145,7 +160,15 @@ export class InstalledBrowser {
                 await this.call('Page.enable');
                 await this.call('Network.enable');
                 await this.call('Fetch.enable', { patterns: [{ urlPattern: '*', requestStage: 'Request' }] });
-            })().catch(async (e) => { const owned = this.owned; this.owned = undefined; this.imageSession = ''; await owned?.stop(); throw e; }).finally(() => { this.starting = undefined; });
+            })().catch(async (e) => {
+                const owned = this.owned;
+                this.owned = undefined;
+                this.imageSession = '';
+                await owned?.stop();
+                throw e;
+            }).finally(() => {
+                this.starting = undefined;
+            });
         await this.starting;
     }
     private async request(event: any, imageDocument = false) {
@@ -172,7 +195,8 @@ export class InstalledBrowser {
         catch {
             if (imageDocument)
                 this.imageWaiter?.reject(new SourceError('Source image redirected to a blocked destination.'));
-            await client.send('Fetch.failRequest', { requestId: event.requestId, errorReason: 'BlockedByClient' }, session).catch(() => { });
+            await client.send('Fetch.failRequest', { requestId: event.requestId, errorReason: 'BlockedByClient' }, session).catch(() => {
+            });
         }
     }
     private call(method: string, params: Record<string, unknown> = {}, signal?: AbortSignal) {
@@ -181,7 +205,9 @@ export class InstalledBrowser {
         return this.owned.client.send(method, params, this.session, signal);
     }
     private async evaluate<T>(expression: string, signal?: AbortSignal): Promise<T> {
-        const result = await this.call('Runtime.evaluate', { expression, returnByValue: true, awaitPromise: true }, signal);
+        const result = await this.call('Runtime.evaluate', {
+            expression, returnByValue: true, awaitPromise: true
+        }, signal);
         if (result.exceptionDetails)
             throw Error('Source page is not ready.');
         return result.result?.value as T;
@@ -198,7 +224,7 @@ export class InstalledBrowser {
         await this.start();
         await this.call('Page.bringToFront');
         if (!this.busy && !this.pendingNavigation)
-            await this.call('Page.navigate', { url: 'https://www.toongod.org/' });
+            await this.call('Page.navigate', { url: 'https://' + this.sourceHosts[0] + '/' });
     }
     async html(input: string, hosts: string[], signal?: AbortSignal) {
         await this.guard(input, this.sourceHosts);
@@ -218,10 +244,10 @@ export class InstalledBrowser {
                 const nav = await this.call('Page.navigate', { url: input }, deadline);
                 this.mainFrame = nav.frameId ?? '';
                 if (nav.errorText)
-                    throw new SourceError('ToonGod could not load in the source browser. Check its visible window and retry.', 'action_required');
+                    throw new SourceError('Source could not load in the source browser. Check its visible window and retry.', 'action_required');
             }
             const url = new URL(input), search = url.searchParams.has('s'), chapter = /chapter[-\/]/i.test(url.pathname);
-            let last = '', stable = 0, clicked = 0, lastClick = 0, notified = false;
+            let last = '', stable = 0, notified = false;
             while (!deadline.aborted) {
                 if (this.owned?.client.closed || !this.session)
                     throw new SourceError('The dedicated source window was closed. Retry to reopen it.', 'action_required');
@@ -233,7 +259,7 @@ export class InstalledBrowser {
                     count: number;
                 } | undefined;
                 try {
-                    state = await this.evaluate(`(()=>{const challenge=/just a moment|attention required|verify you are human/i.test(document.title)||!!document.querySelector('#challenge-form,#challenge-stage');const selector=${JSON.stringify(search ? '.c-tabs-item__content,.bsx,.listupd .bs,.no-results,.search-no-results' : chapter ? '.reading-content img,#readerarea img' : '.wp-manga-chapter a[href],#chapterlist a[href]')};const elements=[...document.querySelectorAll(selector)];return{url:location.href,challenge,ready:elements.length>0,signature:elements.map(e=>e.getAttribute('href')||e.getAttribute('data-src')||e.getAttribute('src')||e.textContent).join('|').slice(0,100000),count:elements.length}})()`, deadline);
+                    state = await this.evaluate(`(()=>{const challenge=/just a moment|attention required|verify you are human/i.test(document.title)||!!document.querySelector('#challenge-form,#challenge-stage');const selector=${JSON.stringify(this.options.generic ? 'body' : search ? '.c-tabs-item__content,.bsx,.listupd .bs,.no-results,.search-no-results' : chapter ? '.reading-content img,#readerarea img' : '.wp-manga-chapter a[href],#chapterlist a[href]')};const elements=[...document.querySelectorAll(selector)];return{url:location.href,challenge,ready:elements.length>0,signature:elements.map(e=>e.getAttribute('href')||e.getAttribute('data-src')||e.getAttribute('src')||e.textContent).join('|').slice(0,100000),count:elements.length}})()`, deadline);
                 }
                 catch (e) {
                     if (deadline.aborted || !this.owned)
@@ -245,21 +271,14 @@ export class InstalledBrowser {
                         this.options.attention?.();
                         await this.call('Page.bringToFront');
                     }
-                    // A bounded checkbox attempt in this controlled tab; other challenges remain visible for the user.
-                    if (clicked < 3 && Date.now() - lastClick > 4000) {
-                        lastClick = Date.now();
-                        clicked++;
-                        const box = await this.evaluate<number[] | null>(`(()=>{for(const e of document.querySelectorAll('.main-content div')){const r=e.getBoundingClientRect();if(r.width>200&&r.height>55&&r.height<90)return[r.x+30,r.y+r.height/2]}return null})()`, deadline).catch(() => null);
-                        if (box) {
-                            await this.call('Input.dispatchMouseEvent', { type: 'mousePressed', x: box[0], y: box[1], button: 'left', clickCount: 1 }, deadline);
-                            await this.call('Input.dispatchMouseEvent', { type: 'mouseReleased', x: box[0], y: box[1], button: 'left', clickCount: 1 }, deadline);
-                        }
-                    }
+                    // Verification is exclusively a human action. Keep the tab intact for retry.
+                    if (this.options.generic)
+                        throw new SourceError('Complete verification in the source Chrome or Edge window on the Windows host, then retry.', 'action_required');
                 }
                 else if (state?.ready) {
                     await this.guard(state.url, this.sourceHosts);
                     if (state.count > 10000)
-                        throw new SourceError('ToonGod page exceeds the item limit.');
+                        throw new SourceError('Source page exceeds the item limit.');
                     stable = state.signature === last ? stable + 1 : 0;
                     last = state.signature;
                     if (stable >= 3) {
@@ -274,17 +293,18 @@ export class InstalledBrowser {
                                     this.imageHosts.push(u.hostname);
                                 }
                             }
-                            catch { /* Decorative/invalid images are not admitted. */ }
+                            catch { /* Decorative/invalid images are not admitted. */
+                            }
                         }
                         const html = await this.evaluate<string>('document.documentElement.outerHTML', deadline);
                         if (Buffer.byteLength(html) > 8 * 1024 * 1024)
-                            throw new SourceError('ToonGod page exceeds the size limit.');
+                            throw new SourceError('Source page exceeds the size limit.');
                         this.pendingNavigation = '';
                         return html;
                     }
                 }
                 else if ([429, 500, 502, 503, 504].includes(this.navigationStatus))
-                    throw new SourceError('ToonGod is temporarily unavailable or rate limiting requests. Wait before retrying.', 'transient');
+                    throw new SourceError('Source is temporarily unavailable or rate limiting requests. Wait before retrying.', 'transient');
                 await delay(350, undefined, { signal: deadline });
             }
             deadline.throwIfAborted();
@@ -294,7 +314,7 @@ export class InstalledBrowser {
             if (signal?.aborted || this.stopped.signal.aborted)
                 throw e;
             if (deadline.aborted)
-                throw new SourceError('ToonGod is waiting for verification in the visible source browser. Complete it there, then retry.', 'action_required');
+                throw new SourceError('Source is waiting for verification in the visible source browser. Complete it there, then retry.', 'action_required');
             if (e instanceof SourceError)
                 throw e;
             throw new SourceError('The installed source browser stopped responding. Retry to reconnect.', 'action_required');
@@ -316,7 +336,9 @@ export class InstalledBrowser {
         const attached = await client.send('Target.attachToTarget', { targetId: target.targetId, flatten: true });
         this.imageSession = attached.sessionId;
         await this.imageCall('Page.enable');
-        await this.imageCall('Fetch.enable', { patterns: [{ urlPattern: '*', requestStage: 'Request' }, { urlPattern: '*', resourceType: 'Document', requestStage: 'Response' }] });
+        await this.imageCall('Fetch.enable', { patterns: [{ urlPattern: '*', requestStage: 'Request' }, {
+                    urlPattern: '*', resourceType: 'Document', requestStage: 'Response'
+                }] });
     }
     private async imageRequest(event: any) {
         if (event.responseStatusCode === undefined) {
@@ -325,7 +347,8 @@ export class InstalledBrowser {
         }
         const waiter = this.imageWaiter;
         if (!waiter || !waiter.requests.has(event.requestId)) {
-            await this.imageCall('Fetch.continueRequest', { requestId: event.requestId }).catch(() => { });
+            await this.imageCall('Fetch.continueRequest', { requestId: event.requestId }).catch(() => {
+            });
             return;
         }
         const headers: {
@@ -350,19 +373,24 @@ export class InstalledBrowser {
                 throw new SourceError('Source image exceeds the size limit.');
             if (status !== 200 || !/^image\/(jpe?g|png|webp)(?:\s*;|$)/i.test(type.trim())) {
                 await this.imageCall('Fetch.failRequest', { requestId: event.requestId, errorReason: 'Aborted' });
-                waiter.reject(new SourceError('ToonGod image access failed in the source browser. Check its window and retry.', [401, 403].includes(status) || /text\/html/i.test(type) ? 'action_required' : 'transient'));
+                waiter.reject(new SourceError('Source image access failed in the source browser. Check its window and retry.', [401, 403].includes(status) || /text\/html/i.test(type) ? 'action_required' : 'transient'));
                 return;
             }
             const stream = await this.imageCall('Fetch.takeResponseBodyAsStream', { requestId: event.requestId });
             if (this.imageWaiter !== waiter) {
-                await this.imageCall('IO.close', { handle: stream.stream }).catch(() => { });
-                await this.imageCall('Fetch.failRequest', { requestId: event.requestId, errorReason: 'Aborted' }).catch(() => { });
+                await this.imageCall('IO.close', { handle: stream.stream }).catch(() => {
+                });
+                await this.imageCall('Fetch.failRequest', { requestId: event.requestId, errorReason: 'Aborted' }).catch(() => {
+                });
                 return;
             }
-            waiter.resolve({ id: event.requestId, status, headers, handle: stream.stream });
+            waiter.resolve({
+                id: event.requestId, status, headers, handle: stream.stream
+            });
         }
         catch (e) {
-            await this.imageCall('Fetch.failRequest', { requestId: event.requestId, errorReason: 'Aborted' }).catch(() => { });
+            await this.imageCall('Fetch.failRequest', { requestId: event.requestId, errorReason: 'Aborted' }).catch(() => {
+            });
             waiter.reject(e as Error);
         }
     }
@@ -383,7 +411,11 @@ export class InstalledBrowser {
             const response = new Promise<{
                 id: string;
                 handle?: string;
-            }>((resolve, reject) => { this.imageWaiter = { urls: new Set([input]), requests: new Set(), resolve, reject }; });
+            }>((resolve, reject) => {
+                this.imageWaiter = {
+                    urls: new Set([input]), requests: new Set(), resolve, reject
+                };
+            });
             const waiter = this.imageWaiter!;
             deadline.addEventListener('abort', cancel, { once: true });
             void this.imageCall('Page.navigate', { url: input, ...(referrer ? { referrer, referrerPolicy: 'strict-origin-when-cross-origin' } : {}) }, deadline).catch(e => waiter.reject(e));
@@ -418,16 +450,20 @@ export class InstalledBrowser {
             deadline.removeEventListener('abort', cancel);
             this.imageWaiter = undefined;
             if (handle)
-                await this.imageCall('IO.close', { handle }).catch(() => { });
+                await this.imageCall('IO.close', { handle }).catch(() => {
+                });
             if (requestId)
-                await this.imageCall('Fetch.failRequest', { requestId, errorReason: 'Aborted' }).catch(() => { });
-            await this.imageCall('Page.stopLoading').catch(() => { });
+                await this.imageCall('Fetch.failRequest', { requestId, errorReason: 'Aborted' }).catch(() => {
+                });
+            await this.imageCall('Page.stopLoading').catch(() => {
+            });
             this.busy = false;
         }
     }
     async close() {
         this.stopped.abort();
-        await this.starting?.catch(() => { });
+        await this.starting?.catch(() => {
+        });
         const owned = this.owned;
         this.owned = undefined;
         await owned?.stop();

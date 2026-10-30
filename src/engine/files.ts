@@ -1,6 +1,7 @@
 import path from 'node:path';
+import { createReadStream } from 'node:fs';
 import { createHash } from 'node:crypto';
-import { mkdir, lstat, readFile, writeFile, rename, realpath, rm } from 'node:fs/promises';
+import { mkdir, lstat, readFile, writeFile, rename, realpath, rm, open } from 'node:fs/promises';
 import { createArchive, verifyArchive, validManifest, validPage, MAX_PAGE_BYTES, MAX_PAGES, type Manifest, type PageRecord } from './archive.js';
 import { seriesDirectory, checkPath } from './folders.js';
 import type { Store } from '../core/store.js';
@@ -40,17 +41,29 @@ export function digest(data: Uint8Array): string {
 }
 export async function readSavedCover(dir: string) {
     await noLink(dir);
-    const candidates: { file: string; modified: number }[] = [];
-    for (const name of ['coverart.png','coverart.jpg','coverart.jpeg']) {
-        const file = contained(dir,name);
-        try { const info=await lstat(file); if(info.isFile()&&!info.isSymbolicLink()&&info.size<=MAX_PAGE_BYTES) candidates.push({file,modified:info.mtimeMs}); } catch { /* Try the other supported filenames. */ }
+    const candidates: {
+        file: string;
+        modified: number;
+    }[] = [];
+    for (const name of ['coverart.png', 'coverart.jpg', 'coverart.jpeg']) {
+        const file = contained(dir, name);
+        try {
+            const info = await lstat(file);
+            if (info.isFile() && !info.isSymbolicLink() && info.size <= MAX_PAGE_BYTES)
+                candidates.push({ file, modified: info.mtimeMs });
+        }
+        catch { /* Try the other supported filenames. */
+        }
     }
-    for (const candidate of candidates.sort((a,b)=>b.modified-a.modified)) {
+    for (const candidate of candidates.sort((a, b) => b.modified - a.modified)) {
         try {
             await noLink(candidate.file);
-            const bytes=await readFile(candidate.file),format=imageExtension(bytes);
-            if (format === (candidate.file.endsWith('.png')?'png':'jpg')) return bytes;
-        } catch { /* A corrupt cover must not hide another valid local cover. */ }
+            const bytes = await readFile(candidate.file), format = imageExtension(bytes);
+            if (format === (candidate.file.endsWith('.png') ? 'png' : 'jpg'))
+                return bytes;
+        }
+        catch { /* A corrupt cover must not hide another valid local cover. */
+        }
     }
 }
 export async function saveCover(root: string, title: string, bytes: Uint8Array, signal?: AbortSignal, series?: Series, store?: Store, format: 'png' | 'jpg' = 'png') {
@@ -147,7 +160,14 @@ export class ChapterOutput {
         this.manifest.finalName = path.basename(this.final);
         await this.save();
     }
-    private async save() {
+    private saves: Promise<void> = Promise.resolve();
+    private save() {
+        const next = this.saves.catch(() => {
+        }).then(() => this.commitManifest());
+        this.saves = next;
+        return next;
+    }
+    private async commitManifest() {
         const temp = contained(this.stage, 'manifest.json.part');
         await noLink(temp);
         await noLink(contained(this.stage, 'manifest.json'));
@@ -217,6 +237,49 @@ export class ChapterOutput {
             name, hash: digest(bytes), size: bytes.length
         };
         await this.save();
+    }
+    async stream(index: number, download: (file: string) => Promise<void>, signal?: AbortSignal) {
+        const temp = contained(this.stage, `${String(index + 1).padStart(5, '0')}.download.part`);
+        await noLink(temp);
+        try {
+            await download(temp);
+            signal?.throwIfAborted();
+            const size = (await lstat(temp)).size;
+            if (size < 12 || size > MAX_PAGE_BYTES)
+                throw Error('Invalid image size');
+            const handle = await open(temp, 'r'), head = Buffer.alloc(16), tail = Buffer.alloc(12);
+            try {
+                await handle.read(head, 0, 16, 0);
+                await handle.read(tail, 0, 12, size - 12);
+            }
+            finally {
+                await handle.close();
+            }
+            let ext: string;
+            if (head.subarray(0, 8).equals(Buffer.from('89504e470d0a1a0a', 'hex')) && tail.subarray(4, 8).toString() === 'IEND')
+                ext = 'png';
+            else if (head[0] === 255 && head[1] === 216 && tail[10] === 255 && tail[11] === 217)
+                ext = 'jpg';
+            else if (head.toString('ascii', 0, 4) === 'RIFF' && head.toString('ascii', 8, 12) === 'WEBP' && head.readUInt32LE(4) + 8 === size)
+                ext = 'webp';
+            else
+                throw Error('Downloaded page is not a complete PNG, JPEG or WebP image.');
+            const hash = createHash('sha256');
+            for await (const chunk of createReadStream(temp, { signal }))
+                hash.update(chunk);
+            const name = `${String(index + 1).padStart(5, '0')}.${ext}`, file = contained(this.stage, name);
+            await noLink(file);
+            signal?.throwIfAborted();
+            await rename(temp, file);
+            this.manifest.pages[index] = {
+                name, hash: hash.digest('hex'), size
+            };
+            await this.save();
+            return size;
+        }
+        finally {
+            await rm(temp, { force: true });
+        }
     }
     async finish(signal?: AbortSignal): Promise<string> {
         for (let i = 0; i < this.manifest.pages.length; i++) {

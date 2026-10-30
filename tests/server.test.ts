@@ -14,13 +14,26 @@ import { workspace,chapter,adapter } from './helpers.js';
 async function harness(count = 2, adapters?: ReturnType<typeof adapter>[]) {
   const w=await workspace(),store=new Store(':memory:');const ch=chapter();const registry=new Registry(adapters??[adapter(count === 2 ? [ch,{...chapter(),number:ch.number}] : Array.from({length:count},(_,i)=>chapter({number:String(i+1)})))]);
   const queue=new Queue(store,registry,()=>w.settings);store.set('queue-paused',true);store.set('admin-hash',await hashPassword('correct horse battery staple'));
-  const dashboard=createDashboard(store,queue,registry,()=>w.settings,path.resolve('dist/ui'));const port=await dashboard.listen(0),origin=`http://127.0.0.1:${port}`;
+  const dashboard=createDashboard(store,queue,registry,()=>w.settings,path.resolve('dist/ui'),next=>{Object.assign(w.settings,next);store.set('settings',next);});const port=await dashboard.listen(0),origin=`http://127.0.0.1:${port}`;
   let cookie='',csrf='';
   async function request(route:string,body?:unknown,extra:Record<string,string>={}):Promise<Response> {return new Promise((resolve,reject)=>{const req=httpRequest(origin+route,{method:body===undefined?'GET':'POST',headers:{...(body===undefined?{}:{'Content-Type':'application/json',Origin:origin,'X-CSRF-Token':csrf}),Cookie:cookie,...extra}},res=>{const parts:Buffer[]=[];res.on('data',p=>parts.push(p));res.on('end',()=>{const headers=new Headers();for(const [key,value]of Object.entries(res.headers))if(value!==undefined)headers.set(key,Array.isArray(value)?value.join(', '):value);resolve(new Response(Buffer.concat(parts),{status:res.statusCode,headers}));});res.on('error',reject);});req.on('error',reject);req.end(body===undefined?undefined:JSON.stringify(body));});}
   async function login(extra:Record<string,string>={}){const r=await request('/api/login',{password:'correct horse battery staple'},extra);cookie=r.headers.get('set-cookie')?.split(';')[0]??'';csrf=(await r.json()).csrf;return r;}
   return {w,store,queue,registry,dashboard,origin,request,login,cleanup:async()=>{await dashboard.close();await queue.stop();store.close();await w.cleanup();}};
 }
 describe('dashboard security and queue API',()=> {
+  it('persists authenticated performance settings without permitting filesystem or security changes',async()=>{
+    const h=await harness(1);try{
+      expect((await h.request('/api/performance')).status).toBe(401);
+      await h.login();const config=await(await h.request('/api/performance')).json();expect(config).not.toHaveProperty('downloadRoot');
+      const changed=await h.request('/api/performance',{...config,performanceProfile:'fast',globalChapters:5,pageRequests:10,globalPageRequests:30});
+      expect(changed.status).toBe(200);expect(h.store.get<any>('settings')).toMatchObject({globalChapters:5,pageRequests:10,downloadRoot:h.w.dir});
+      expect((await h.request('/api/performance',{downloadRoot:'C:/Wrong'})).status).toBe(400);
+      expect((await h.request('/api/performance',{globalPageRequests:999})).status).toBe(400);
+      expect((await h.request('/api/performance',{pageRequests:3},{'X-CSRF-Token':'wrong'})).status).toBe(403);
+      expect(await(await h.request('/api/summary')).json()).toHaveProperty('performance.activeImages',0);
+    }finally{await h.cleanup();}
+  });
+
   it('checks an external ZIP folder and reports completed chapters without rewriting files',async()=>{
     const h=await harness(1);try{
       await h.login();const source=h.registry.get('mangadex'),series=await source.series('11111111-1111-4111-8111-111111111111');

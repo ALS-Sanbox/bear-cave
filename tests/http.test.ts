@@ -1,15 +1,33 @@
 import { describe,it,expect,vi,beforeEach } from 'vitest';
 import { EventEmitter } from 'node:events';
+import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
+import { png } from './helpers.js';
 import { PassThrough } from 'node:stream';
 const mocks=vi.hoisted(()=>({lookup:vi.fn(),get:vi.fn(),request:vi.fn()}));
 vi.mock('node:dns/promises',()=>({lookup:mocks.lookup}));
-vi.mock('node:https',()=>({default:{get:mocks.get,request:mocks.request}}));
+vi.mock('node:https',async importOriginal=>{const actual=await importOriginal<typeof import('node:https')>();return {default:{...actual,get:mocks.get,request:mocks.request}};});
 import { SafeHttp,validateUrl,publicIPv4,retryAfter,Gate } from '../src/sources/http.js';
-function response(status:number,headers:Record<string,string>={},body='{}') {
+function response(status:number,headers:Record<string,string>={},body: string | Buffer='{}') {
   mocks.get.mockImplementationOnce((_url,_options,callback)=>{const req=new EventEmitter() as EventEmitter & {setTimeout:()=>void;destroy:(e:Error)=>void};req.setTimeout=()=>{};req.destroy=e=>req.emit('error',e);queueMicrotask(()=>{const res=new PassThrough() as PassThrough & {statusCode:number;headers:Record<string,string>};res.statusCode=status;res.headers=headers;callback(res);res.end(body);});return req;});
 }
 beforeEach(()=>{mocks.lookup.mockReset();mocks.get.mockReset();mocks.request.mockReset();mocks.lookup.mockResolvedValue([{address:'8.8.8.8',family:4}]);});
 describe('safe source networking',()=> {
+  it('streams image bytes to a temporary file and rejects a changed DNS destination before pooling',async()=>{
+    const dir=await mkdtemp(path.join(os.tmpdir(),'bear-http-stream-')),file=path.join(dir,'page.part');
+    try {
+      response(200,{'content-type':'image/png'},png);const http=new SafeHttp(0);
+      await http.getToFile('https://uploads.mangadex.org/page.png',['uploads.mangadex.org'],file);
+      expect(await readFile(file)).toEqual(png);
+      expect(mocks.get.mock.calls[0][1].agent.keepAlive).toBe(true);
+      expect(mocks.get.mock.calls[0][1].validatedAddress).toBe('8.8.8.8');
+      mocks.lookup.mockResolvedValueOnce([{address:'10.0.0.1',family:4}]);
+      await expect(http.getToFile('https://uploads.mangadex.org/page.png',['uploads.mangadex.org'],file)).rejects.toThrow('blocked');
+      expect(mocks.get).toHaveBeenCalledTimes(1);
+    } finally {await rm(dir,{recursive:true,force:true});}
+  });
+
   it('accepts image/jpg responses but rejects MIME lookalikes',async()=>{
     response(200,{'content-type':'image/jpg'},'jpeg fixture');
     expect((await new SafeHttp(0).get('https://static.comix.to/cover.jpg',['static.comix.to'],undefined,true)).toString()).toBe('jpeg fixture');

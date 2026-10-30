@@ -69,16 +69,16 @@ export async function reconcile(store: Store, series: Series, chapters: Chapter[
             if (existing?.output && existing.output !== file && path.resolve(existing.root) === path.resolve(settings.downloadRoot) && (await verifyOutput(existing, signal)).state === 'verified')
                 continue;
             const candidate = {
-                ...(existing ?? { root: settings.downloadRoot, chapter }), external:undefined,source: series.source, series, root: settings.downloadRoot, output: file
+                ...(existing ?? { root: settings.downloadRoot, chapter }), external: undefined, source: series.source, series, root: settings.downloadRoot, output: file
             };
-            const verification = entry.isDirectory() ? await verifyOutput(candidate as import('../shared/types.js').Job, signal) : {state:'verified' as const,checked:new Date().toISOString()};
+            const verification = entry.isDirectory() ? await verifyOutput(candidate as import('../shared/types.js').Job, signal) : { state: 'verified' as const, checked: new Date().toISOString() };
             if (verification.state !== 'verified')
                 continue;
             if (existing && store.job(existing.id)?.state !== 'completed')
                 continue;
             const job = existing ?? store.enqueue(series, chapter, settings, { importOutput: true }).job;
             store.update(job.id, {
-                external:undefined,state: 'completed', root: settings.downloadRoot, output: file, format: entry.isDirectory() ? 'folders' : 'cbz', done: manifest.pages.length, total: manifest.pages.length, verification
+                external: undefined, state: 'completed', root: settings.downloadRoot, output: file, format: entry.isDirectory() ? 'folders' : 'cbz', done: manifest.pages.length, total: manifest.pages.length, verification
             });
             verified.add(job.id);
         }
@@ -94,7 +94,8 @@ export async function reconcile(store: Store, series: Series, chapters: Chapter[
             ? await verifyOutput(job, signal) : { state: 'missing' as const, checked: new Date().toISOString() };
         if (store.job(job.id)?.state === 'completed')
             store.update(job.id, { verification });
-        if (verification.state==='verified')verified.add(job.id);
+        if (verification.state === 'verified')
+            verified.add(job.id);
     }
     return verified;
 }
@@ -186,9 +187,12 @@ export async function syncSeries(store: Store, adapter: SourceAdapter, series: S
         finally {
             await rm(temp, { force: true });
         }
+        if (options.offline)
+            return;
         try {
             const bytes = await readSavedCover(dir);
-            if (!bytes) throw Error('Cover unavailable');
+            if (!bytes)
+                throw Error('Cover unavailable');
             const image = sharp(bytes);
             await image.stats();
             return;

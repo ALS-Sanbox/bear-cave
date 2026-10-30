@@ -13,8 +13,10 @@ const collection = z.object({
     data: z.array(entity), total: z.number().int().nonnegative(), offset: z.number().int().nonnegative(), limit: z.number().int().positive()
 });
 export const mangadexManifest: SourceManifest = {
-    id: 'mangadex', name: 'MangaDex', website: 'https://mangadex.org/', status: 'operational', interfaceVersion: 1, capabilities: ['search', 'series', 'chapters', 'public-download', 'local-session'], apiHosts: ['api.mangadex.org'], imageHosts: ['uploads.mangadex.org', '*.mangadex.network'], recommended: {
-        chapters: 1, pageRequests: 1, requestIntervalMs: 300
+    limits: {
+        chapters: 4, pageRequests: 6, minIntervalMs: 500
+    }, id: 'mangadex', name: 'MangaDex', website: 'https://mangadex.org/', status: 'operational', interfaceVersion: 1, capabilities: ['search', 'series', 'chapters', 'public-download', 'local-session'], apiHosts: ['api.mangadex.org'], imageHosts: ['uploads.mangadex.org', '*.mangadex.network'], recommended: {
+        chapters: 1, pageRequests: 6, requestIntervalMs: 300
     }
 };
 function localized(value: unknown): string {
@@ -55,6 +57,9 @@ export class MangaDex implements SourceAdapter {
         if (!file.success)
             throw new SourceError('This series has no available cover art.');
         return this.images.get(`https://uploads.mangadex.org/covers/${id}/${file.data}`, this.manifest.imageHosts, signal, true);
+    }
+    configureDownloads(settings: import('../shared/types.js').Settings) {
+        (this.images as Partial<SafeHttp>).configureDownloads?.(settings, 'mangadex', 500);
     }
     constructor(private http: JsonClient, private images: Pick<SafeHttp, 'get'> = sharedHttp) {
     }

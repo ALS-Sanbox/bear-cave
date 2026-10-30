@@ -64,8 +64,8 @@ app.whenReady().then(async()=>{
   assert((await remote.webContents.executeJavaScript('document.body.innerText')).includes('Find your next chapter.'));
   await remote.webContents.executeJavaScript(`Array.from(document.querySelectorAll('nav button')).find(b=>b.textContent.includes('Sources')).click()`);
   await new Promise(r=>setTimeout(r,100));
-  assert((await remote.webContents.executeJavaScript('document.body.innerText')).includes('Comix'));assert(!(await remote.webContents.executeJavaScript('document.querySelector(".source-grid").innerText')).includes('ToonGod'));assert.equal(await remote.webContents.executeJavaScript('Array.from(document.querySelectorAll(".source-grid button")).some(b=>b.innerText.includes("Explore Comix"))'),true);
-  assert.equal(await remote.webContents.executeJavaScript('document.querySelectorAll(".source-grid article").length'),8);
+  assert((await remote.webContents.executeJavaScript('document.body.innerText')).includes('Comix'));assert((await remote.webContents.executeJavaScript('document.querySelector(".source-grid").innerText')).includes('ToonGod'));assert.equal(await remote.webContents.executeJavaScript('Array.from(document.querySelectorAll(".source-grid button")).some(b=>b.innerText.includes("Explore ToonGod"))'),false);assert.equal(await remote.webContents.executeJavaScript('Array.from(document.querySelectorAll(".source-grid button")).some(b=>b.innerText.includes("Explore Comix"))'),true);
+  assert.equal(await remote.webContents.executeJavaScript('document.querySelectorAll(".source-grid article").length'),10);
   assert(await remote.webContents.executeJavaScript('Array.from(document.images).every(i=>i.complete && i.naturalWidth>0)'));
   server.auth.clear();
   await new Promise(r=>setTimeout(r,3000));

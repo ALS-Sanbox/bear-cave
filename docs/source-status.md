@@ -1,6 +1,6 @@
 # Version 0.3.0 source status
 
-All eight adapters are enabled in the source selector and per-source concurrency settings. Enabled means connector code exists; it does not guarantee current website availability or authorized access to every chapter.
+All nine adapters are enabled in the source selector and per-source concurrency settings. Enabled means connector code exists; it does not guarantee current website availability or authorized access to every chapter.
 
 | Source | Implementation | Live validation on October 20, 2026 |
 | --- | --- | --- |
@@ -49,10 +49,24 @@ ToonGod was removed from registration, dashboard search and local session action
 
 ## Federated search and rendered Comix integration
 
-Discover now defaults to all eight registered sources, with three concurrent source searches, a 35-second deadline per source, incremental results, individual errors/retry, and per-source pagination. An obsolete query is cancelled and cannot overwrite the current results. Source identity remains part of every result key and subsequent series/chapter/download request. Disabled sources are excluded.
+Discover now defaults to all nine registered sources, with three concurrent source searches, a 35-second deadline per source, incremental results, individual errors/retry, and per-source pagination. An obsolete query is cancelled and cannot overwrite the current results. Source identity remains part of every result key and subsequent series/chapter/download request. Disabled sources are excluded.
 
 Comix uses ordinary page JavaScript in a sandboxed, isolated Chromium partition without a privileged preload. It reads rendered browse cards, metadata, every advertised chapter-list page, and every numbered lazy reader image; an incomplete list or reader fails instead of being used for a bulk download. Chapter translations remain distinct and can be filtered by group. It neither decodes the signed API itself nor automates human challenges. Native fixtures exercise pagination, lazy images, cancellation and session image requests.
 
 Image destinations observed in the Comix rendering window are admitted as exact HTTPS hosts only after public-DNS validation, with a 100-host cap. They are reused by the source-isolated session transport, which still enforces response sizes, redirects and cancellation. HTML uses no-store; image requests may use the Chromium cache. No arbitrary image host is accepted from dashboard callers. The Node-only registry has no browser renderer and reports that desktop Comix is required.
 
 Live commands: `npm.cmd run smoke:sources -- mangapill weebcentral` and, after building, `node scripts/run-electron.mjs scripts/comix-live-smoke.cjs`. The Comix smoke uses a temporary profile and cannot complete a human challenge. Historical ToonGod notes above do not indicate an enabled connector.
+
+## MangaFreak addition, October 28, 2026
+
+MangaFreak (`https://ww3.mangafreak.me/`) is registered for search, covers, English chapter listing and public page downloads. Search follows advertised result pages before dashboard slicing; chapter suffixes and reader image order are preserved. HTML is restricted to the supplied website host and images to the observed `images.mangafreak.me` host. Existing pacing, session, challenge handling and download validation apply.
+
+Live `npm.cmd run smoke:sources -- mangafreak` passed: One Piece search returned seven titles, the series listed 1,202 chapter entries, chapter 1 resolved 54 pages, and its first JPEG downloaded successfully (169,378 bytes). Offline fixtures cover pagination, filters, suffixes, metadata, page order/revisions, empty readers and rejected destinations/identities.
+
+## 0.4.0 browser and ToonGod verification, October 29, 2026
+
+Direct ToonGod public HTTPS and an isolated installed Chrome/Edge probe both required human verification. The source remains disabled and is displayed as unavailable, with no Explore/download action. Search, metadata, cover, chapter extraction and images remain live-unverified. Existing WordPress fixtures still pass. Automatic checkbox interactions were removed.
+
+Operational website sources now support normal HTTP first, optional source-isolated browser sessions, reusable rendering and installed-browser fallback. Human checks happen on the Windows host. The optimized MangaFreak live check downloaded and verified all 54 pages of One Piece chapter 1 (9,703,375 bytes) in 4.753 seconds with zero failed images or retries. See [performance verification](performance-0.4.0.md) for limits and measured fixture benchmarks.
+
+The Comix live check loaded Overgeared search/metadata, all 1,300 chapter entries and ordered readers. An initial image failure was traced to an explicit Referer rejected by its CDN. The source now preserves its original no-Referer/no-Origin image requests for both buffers and streaming files. A complete 101-page chapter 345 subsequently downloaded and independently verified, with zero failed images and six source transport retries. The browser workload took 81.904 seconds including reader resolution and archive finalization; this is an absolute measurement, not a before/after speedup.

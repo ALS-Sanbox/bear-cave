@@ -9,6 +9,7 @@ import type { Queue } from '../engine/queue.js';
 import type { Registry } from '../sources/registry.js';
 import type { Settings, Chapter, Series } from '../shared/types.js';
 import { SourceError } from '../shared/types.js';
+import { performancePreferences, updatePerformance } from '../core/settings.js';
 import { Auth } from './auth.js';
 import { saveCover } from '../engine/files.js';
 import { findSeriesDirectory } from '../engine/folders.js';
@@ -39,11 +40,16 @@ interface Preview {
     format?: 'folders' | 'cbz';
 }
 const opaqueId = z.string().min(1).max(1200).regex(/^[a-zA-Z0-9_-]+$/);
-export function createDashboard(store: Store, queue: Queue, registry: Registry, settings: () => Settings, uiDir: string) {
+export function createDashboard(store: Store, queue: Queue, registry: Registry, settings: () => Settings, uiDir: string, saveSettings?: (next: Settings) => void) {
     const auth = new Auth(store), previews = new Map<string, Preview>();
     let busyPreviews = 0;
-    let scanningLibrary=false;
-    const scans=new Map<string,{expires:number;result:unknown;folder:string;modified:number}>();
+    let scanningLibrary = false;
+    const scans = new Map<string, {
+        expires: number;
+        result: unknown;
+        folder: string;
+        modified: number;
+    }>();
     let reads: number[] = [];
     const covers = new CoverCache(registry, (source, id) => readLibraryCover(store, settings().downloadRoot, source, id)), follows = new FollowScheduler(store, registry, queue, settings);
     const seriesHints = new Map<string, Series>();
@@ -51,8 +57,11 @@ export function createDashboard(store: Store, queue: Queue, registry: Registry, 
         covers.remember(series);
         const key = `${series.source}:${series.id}`;
         seriesHints.delete(key);
-        seriesHints.set(key, { id: series.id, source: series.source, title: series.title, description: '' });
-        if (seriesHints.size > 1000) seriesHints.delete(seriesHints.keys().next().value!);
+        seriesHints.set(key, {
+            id: series.id, source: series.source, title: series.title, description: ''
+        });
+        if (seriesHints.size > 1000)
+            seriesHints.delete(seriesHints.keys().next().value!);
     };
     const verifyingJobs = new Set<string>();
     let verifying = 0, closing = false;
@@ -113,6 +122,7 @@ export function createDashboard(store: Store, queue: Queue, registry: Registry, 
             if (closing)
                 throw new ApiError(503, 'Bear Cave is stopping.');
             const s = settings();
+            registry.configure(s);
             const address = server.address();
             const port = typeof address === 'object' && address ? address.port : s.port;
             const locals = [`http://127.0.0.1:${port}`, `http://localhost:${port}`];
@@ -159,11 +169,20 @@ export function createDashboard(store: Store, queue: Queue, registry: Registry, 
                     res.setHeader('Set-Cookie', cookie('', 0));
                     return send(res, 200, { ok: true });
                 }
+                if (url.pathname === '/api/performance' && method === 'GET')
+                    return send(res, 200, performancePreferences(settings()));
+                if (url.pathname === '/api/performance' && method === 'POST') {
+                    if (!saveSettings)
+                        throw new ApiError(503, 'Performance settings are unavailable in this host.');
+                    const next = updatePerformance(settings(), await body(req));
+                    saveSettings(next);
+                    return send(res, 200, performancePreferences(settings()));
+                }
                 if (method === 'GET' && url.pathname === '/api/sources')
                     return send(res, 200, registry.manifests().map(m => ({ ...m, hold: store.holds().find(h => h.source === m.id) ?? null })));
                 if (method === 'GET' && url.pathname === '/api/summary')
                     return send(res, 200, {
-                        jobs: [], total: 0, groups: {}, counts: store.counts(), holds: store.holds(), paused: Boolean(store.get('queue-paused'))
+                        jobs: [], total: 0, groups: {}, counts: store.counts(), holds: store.holds(), paused: Boolean(store.get('queue-paused')), performance: queue.metrics()
                     });
                 if (method === 'GET' && url.pathname === '/api/jobs') {
                     const history = url.searchParams.get('history') === 'true', offset = z.coerce.number().int().min(0).max(10000000).parse(url.searchParams.get('offset') ?? 0), limit = z.coerce.number().int().min(1).max(100).parse(url.searchParams.get('limit') ?? 100);
@@ -171,7 +190,7 @@ export function createDashboard(store: Store, queue: Queue, registry: Registry, 
                         history, offset, limit, source: url.searchParams.get('source') || undefined, state: url.searchParams.get('state') || undefined, search: (url.searchParams.get('q') ?? '').slice(0, 200)
                     });
                     return send(res, 200, {
-                        ...page, jobs: page.jobs.map(publicJob), groups: store.groupSummaries(page.jobs), counts: store.counts(), holds: store.holds(), paused: Boolean(store.get('queue-paused'))
+                        ...page, jobs: page.jobs.map(publicJob), groups: store.groupSummaries(page.jobs), counts: store.counts(), holds: store.holds(), paused: Boolean(store.get('queue-paused')), performance: queue.metrics()
                     });
                 }
                 if (method === 'GET' && url.pathname === '/api/library-status') {
@@ -227,7 +246,7 @@ export function createDashboard(store: Store, queue: Queue, registry: Registry, 
                         const verification = await verifyOutput(job, abort.signal);
                         store.update(id, { verification });
                         if (registry.manifests().some(m => m.id === job.source && m.status === 'operational'))
-                            await syncSeries(store, registry.get(job.source), job.series, job.root, abort.signal, undefined, { create: false, coverFormat:s.coverFormat }).catch(e => console.warn('Metadata:', (e as Error).message));
+                            await syncSeries(store, registry.get(job.source), job.series, job.root, abort.signal, undefined, { create: false, coverFormat: s.coverFormat }).catch(e => console.warn('Metadata:', (e as Error).message));
                         return send(res, 200, verification);
                     }
                     finally {
@@ -277,15 +296,17 @@ export function createDashboard(store: Store, queue: Queue, registry: Registry, 
                     return send(res, 200, action === 'preview' ? previewFor(session.id, result.follow.series, result.chapters, result.follow.outputFormat === 'inherit' ? undefined : result.follow.outputFormat) : { ...result.summary, follow: { ...result.follow, series: publicSeries(result.follow.series) } });
                 }
                 if (method === 'POST' && url.pathname === '/api/cover') {
-                    const data = z.object({ source: z.string().max(30), id: opaqueId, format:z.enum(['png','jpg']).optional() }).strict().parse(await body(req));
+                    const data = z.object({
+                        source: z.string().max(30), id: opaqueId, format: z.enum(['png', 'jpg']).optional()
+                    }).strict().parse(await body(req));
                     const adapter = registry.get(data.source);
                     if (!adapter.cover)
                         throw new ApiError(400, 'Cover art is unavailable for this source.');
                     const series = await adapter.series(data.id, abort.signal), bytes = await adapter.cover(data.id, abort.signal);
                     const format = data.format ?? s.coverFormat ?? 'png';
                     await saveCover(s.downloadRoot, series.title, bytes, abort.signal, series, store, format);
-                    await syncSeries(store, adapter, series, s.downloadRoot, abort.signal, undefined, {coverFormat:format}).catch(e => console.warn('Metadata:', (e as Error).message));
-                    return send(res, 200, { saved: true, filename:`coverart.${format}` });
+                    await syncSeries(store, adapter, series, s.downloadRoot, abort.signal, undefined, { coverFormat: format }).catch(e => console.warn('Metadata:', (e as Error).message));
+                    return send(res, 200, { saved: true, filename: `coverart.${format}` });
                 }
                 if (method === 'POST' && url.pathname === '/api/jobs/delete') {
                     const data = z.object({ id: z.string().uuid().optional(), all: z.literal(true).optional() }).strict().refine(d => Boolean(d.id) !== Boolean(d.all)).parse(await body(req));
@@ -319,7 +340,7 @@ export function createDashboard(store: Store, queue: Queue, registry: Registry, 
                         if (!res.destroyed && !abort.signal.aborted)
                             res.write(JSON.stringify(event) + '\n');
                     };
-                    await Promise.all(targets.map(async target => {
+                    await Promise.all(targets.map(async (target) => {
                         const signal = AbortSignal.any([abort.signal, AbortSignal.timeout(35000)]);
                         let cancel!: () => void;
                         try {
@@ -331,10 +352,13 @@ export function createDashboard(store: Store, queue: Queue, registry: Registry, 
                             const page = await Promise.race([registry.get(target.id).search(query, 0, signal), cancelled]);
                             page.items.forEach(remember);
                             emit({ source: target.id, page: { ...page, items: page.items.map(publicSeries) } });
-                        } catch (e) {
+                        }
+                        catch (e) {
                             emit({ source: target.id, error: signal.aborted ? 'Search timed out. Retry this source.' : e instanceof SourceError ? e.message : 'Source search failed. Retry this source.' });
-                        } finally {
-                            if (cancel) signal.removeEventListener('abort', cancel);
+                        }
+                        finally {
+                            if (cancel)
+                                signal.removeEventListener('abort', cancel);
                         }
                     }));
                     return res.end();
@@ -371,36 +395,54 @@ export function createDashboard(store: Store, queue: Queue, registry: Registry, 
                         if (peer)
                             local[c.id] = peer;
                     }
-                    return send(res, 200, { ...page, library: libraryStatus(store, { id, source: adapter.manifest.id, title: '', description: '' }, page.total, s.downloadRoot), items: page.items.map(c => ({
+                    return send(res, 200, {
+                        ...page, library: libraryStatus(store, {
+                            id, source: adapter.manifest.id, title: '', description: ''
+                        }, page.total, s.downloadRoot), items: page.items.map(c => ({
                             ...c, localChapterId: local[c.id]?.chapter.id, localSource: local[c.id]?.source, localJobId: local[c.id]?.id, localState: local[c.id]?.verification && ['missing', 'damaged'].includes(local[c.id].verification!.state) ? local[c.id].verification!.state : local[c.id]?.state ?? 'not_downloaded'
-                        })) });
+                        }))
+                    });
                 }
                 if (method === 'POST' && url.pathname === '/api/library-scan') {
-                    const data=z.object({source:z.string().max(30),seriesId:opaqueId,language:z.string().min(2).max(10),group:opaqueId.optional(),force:z.boolean().optional()}).strict().parse(await body(req));
-                    const adapter=registry.get(data.source),key=JSON.stringify([s.downloadRoot,data.source,data.seriesId,data.language,data.group]);
-                    const cached=scans.get(key);
-                    if(!data.force&&cached&&cached.expires>Date.now()){
-                        const info=await lstat(cached.folder).catch(()=>undefined);
-                        if(info?.isDirectory()&&!info.isSymbolicLink()&&info.mtimeMs===cached.modified)return send(res,200,cached.result);
+                    const data = z.object({
+                        source: z.string().max(30), seriesId: opaqueId, language: z.string().min(2).max(10), group: opaqueId.optional(), force: z.boolean().optional()
+                    }).strict().parse(await body(req));
+                    const adapter = registry.get(data.source), key = JSON.stringify([s.downloadRoot, data.source, data.seriesId, data.language, data.group]);
+                    const cached = scans.get(key);
+                    if (!data.force && cached && cached.expires > Date.now()) {
+                        const info = await lstat(cached.folder).catch(() => undefined);
+                        if (info?.isDirectory() && !info.isSymbolicLink() && info.mtimeMs === cached.modified)
+                            return send(res, 200, cached.result);
                     }
-                    if(scanningLibrary)throw new ApiError(409,'Another folder check is finishing. Try again shortly.');
-                    scanningLibrary=true;
-                    const signal=AbortSignal.any([abort.signal,AbortSignal.timeout(300000)]);
+                    if (scanningLibrary)
+                        throw new ApiError(409, 'Another folder check is finishing. Try again shortly.');
+                    scanningLibrary = true;
+                    const signal = AbortSignal.any([abort.signal, AbortSignal.timeout(300000)]);
                     try {
-                        const series=seriesHints.get(`${data.source}:${data.seriesId}`)??await adapter.series(data.seriesId,signal);
-                        const found=await existingSeriesFolder(store,series,s.downloadRoot);
-                        let result:unknown;
-                        if(!found.folder)result={folderFound:false,imported:0,ambiguous:found.ambiguous?1:0,skipped:0};
-                        else{
-                            const chapters=await matching(adapter,data.seriesId,data,undefined,signal);
-                            const verified=await reconcile(store,series,chapters,s,signal);
-                            result={...await reconcileExternal(store,series,chapters,s,signal,verified),completed:libraryStatus(store,series,chapters.length,s.downloadRoot).downloaded};
+                        const series = seriesHints.get(`${data.source}:${data.seriesId}`) ?? await adapter.series(data.seriesId, signal);
+                        const found = await existingSeriesFolder(store, series, s.downloadRoot);
+                        let result: unknown;
+                        if (!found.folder)
+                            result = {
+                                folderFound: false, imported: 0, ambiguous: found.ambiguous ? 1 : 0, skipped: 0
+                            };
+                        else {
+                            const chapters = await matching(adapter, data.seriesId, data, undefined, signal);
+                            const verified = await reconcile(store, series, chapters, s, signal);
+                            result = { ...await reconcileExternal(store, series, chapters, s, signal, verified), completed: libraryStatus(store, series, chapters.length, s.downloadRoot).downloaded };
                         }
                         signal.throwIfAborted();
-                        if(found.folder)scans.set(key,{expires:Date.now()+30000,result,folder:found.folder,modified:(await lstat(found.folder)).mtimeMs});
-                        if(scans.size>64)scans.delete(scans.keys().next().value!);
-                        return send(res,200,result);
-                    } finally {scanningLibrary=false;}
+                        if (found.folder)
+                            scans.set(key, {
+                                expires: Date.now() + 30000, result, folder: found.folder, modified: (await lstat(found.folder)).mtimeMs
+                            });
+                        if (scans.size > 64)
+                            scans.delete(scans.keys().next().value!);
+                        return send(res, 200, result);
+                    }
+                    finally {
+                        scanningLibrary = false;
+                    }
                 }
                 if (method === 'POST' && url.pathname === '/api/preview') {
                     const data = z.object({
@@ -415,9 +457,9 @@ export function createDashboard(store: Store, queue: Queue, registry: Registry, 
                     busyPreviews++;
                     try {
                         const adapter = registry.get(data.source), series = await adapter.series(data.seriesId, abort.signal), resolved = await matching(adapter, data.seriesId, data.all ? { language: '*' } : data, data.all ? undefined : data.ids, abort.signal), chapters = resolved.filter(c => !data.exclude?.includes(c.id));
-                        const verified=await reconcile(store, series, chapters, s, abort.signal);
-                        await reconcileExternal(store,series,chapters,s,abort.signal,verified);
-                        await syncSeries(store, adapter, series, s.downloadRoot, abort.signal, data.all ? resolved.length : undefined, { create: false, coverFormat:s.coverFormat }).catch(e => console.warn('Metadata:', (e as Error).message));
+                        const verified = await reconcile(store, series, chapters, s, abort.signal);
+                        await reconcileExternal(store, series, chapters, s, abort.signal, verified);
+                        await syncSeries(store, adapter, series, s.downloadRoot, abort.signal, data.all ? resolved.length : undefined, { create: false, coverFormat: s.coverFormat }).catch(e => console.warn('Metadata:', (e as Error).message));
                         return send(res, 200, previewFor(session.id, series, chapters));
                     }
                     finally {

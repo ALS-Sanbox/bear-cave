@@ -1,4 +1,27 @@
 import https from 'node:https';
+import { createWriteStream } from 'node:fs';
+import { rm } from 'node:fs/promises';
+import { pipeline } from 'node:stream/promises';
+import { Transform } from 'node:stream';
+import type { Settings } from '../shared/types.js';
+// The validated IP is part of the pool key. A newly validated destination can never
+// borrow a socket opened for a different DNS result. TLS still validates the hostname.
+export class PinnedAgent extends https.Agent {
+    override getName(options: https.RequestOptions & {
+        validatedAddress?: string;
+    }): string {
+        return super.getName(options) + ':' + (options.validatedAddress ?? 'unvalidated');
+    }
+}
+const pooledAgent = new PinnedAgent({
+    keepAlive: true, maxSockets: 20, maxTotalSockets: 40, maxFreeSockets: 4, timeout: 30000, scheduling: 'lifo'
+});
+export function closeHttpConnections() {
+    pooledAgent.destroy();
+}
+export function retryDelay(attempt: number, base = 1000, retryAfterMs = 0, random = Math.random) {
+    return Math.max(retryAfterMs, Math.min(60000, base * 2 ** attempt) * (0.8 + random() * 0.4));
+}
 import type { IncomingHttpHeaders } from 'node:http';
 import { lookup } from 'node:dns/promises';
 import { isIP } from 'node:net';
@@ -24,6 +47,9 @@ export class Gate {
     private next = 0;
     private blockedUntil = 0;
     constructor(private interval: number) {
+    }
+    setInterval(ms: number) {
+        this.interval = ms;
     }
     block(ms: number) {
         this.blockedUntil = Math.max(this.blockedUntil, Date.now() + ms);
@@ -53,9 +79,24 @@ export function retryAfter(value: string | undefined): number {
     return Math.max(0, Number.isFinite(seconds) ? seconds * 1000 : Date.parse(value) - Date.now()) || 0;
 }
 export class SafeHttp {
+    retryCount = 0;
     private api = new Gate(300);
     private atHome = new Gate(1600);
     private images = new Gate(500);
+    private settings?: Settings;
+    configureDownloads(settings: Settings, source = 'mangadex', minimum = 500, fallback = minimum) {
+        this.settings = settings;
+        this.images.setInterval(Math.max(minimum, settings.sourceIntervals?.[source] ?? fallback));
+    }
+    async getToFile(input: string, hosts: string[], file: string, signal?: AbortSignal, options: RequestOptions = {}) {
+        try {
+            await this.get(input, hosts, signal, true, { ...options, outputFile: file });
+        }
+        catch (e) {
+            await rm(file, { force: true });
+            throw e;
+        }
+    }
     constructor(intervalMs = 300) {
         this.api = new Gate(intervalMs);
         this.images = new Gate(Math.max(500, intervalMs));
@@ -68,9 +109,10 @@ export class SafeHttp {
             catch (e) {
                 if (signal?.aborted)
                     throw e;
-                if (options.form || !(e instanceof SourceError) || e.kind !== 'transient' || attempt >= 3)
+                if (options.form || !(e instanceof SourceError) || e.kind !== 'transient' || attempt >= (this.settings?.retryAttempts ?? 3))
                     throw e;
-                await delay(Math.max(e.retryAfterMs, 1000 * 2 ** attempt), undefined, { signal });
+                this.retryCount++;
+                await delay(retryDelay(attempt, this.settings?.retryBaseMs, e.retryAfterMs), undefined, { signal });
             }
         }
     }
@@ -99,6 +141,8 @@ export class SafeHttp {
             };
             if (options.referer)
                 headers.Referer = options.referer;
+            if (options.origin)
+                headers.Origin = options.origin;
             if (options.bearer)
                 headers.Authorization = `Bearer ${options.bearer}`;
             if (cookie)
@@ -109,6 +153,19 @@ export class SafeHttp {
                 headers['Content-Length'] = String(Buffer.byteLength(payload));
             }
             const callback = (res: import('node:http').IncomingMessage) => {
+                const contentType = String(res.headers['content-type'] ?? '');
+                if (image && options.outputFile && res.statusCode === 200 && /^image\/(jpe?g|png|webp)(?:\s*;|$)/i.test(contentType.trim())) {
+                    let size = 0;
+                    const bounded = new Transform({ transform(chunk, _encoding, callback) {
+                            size += chunk.length;
+                            callback(size > 32 * 1024 * 1024 ? new SourceError('Source response exceeds size limit.') : null, chunk);
+                        } });
+                    void pipeline(res, bounded, createWriteStream(options.outputFile), ...(signal ? [{ signal }] : []))
+                        .then(() => resolve({
+                        status: res.statusCode!, headers: res.headers, body: Buffer.alloc(0)
+                    }), e => reject(e instanceof SourceError || signal?.aborted ? e : new SourceError('Source response stream failed.', 'transient')));
+                    return;
+                }
                 const chunks: Buffer[] = [];
                 let size = 0;
                 const max = image ? 32 * 1024 * 1024 : 8 * 1024 * 1024;
@@ -120,20 +177,32 @@ export class SafeHttp {
                     else
                         chunks.push(chunk);
                 });
-                res.on('error', reject);
+                res.on('error', e => reject(e instanceof SourceError || signal?.aborted ? e : new SourceError('Source response stream failed.', 'transient')));
                 res.on('end', () => resolve({
                     status: res.statusCode ?? 500, headers: res.headers, body: Buffer.concat(chunks)
                 }));
             };
             const opts: https.RequestOptions = {
-                signal, agent: false, family: 4, lookup: (_host, _options, cb) => cb(null, address, 4), headers
+                signal, agent: pooledAgent, family: 4, lookup: (_host, _options, cb) => cb(null, address, 4), headers
             };
+            Object.assign(opts, { validatedAddress: address });
             const req = payload ? https.request(u, { ...opts, method: 'POST' }, callback) : https.get(u, opts, callback);
             if (payload)
                 req.end(payload);
-            const deadline = setTimeout(() => req.destroy(new SourceError('Source request deadline exceeded.', 'transient')), 60000);
+            const deadline = setTimeout(() => req.destroy(new SourceError('Source request deadline exceeded.', 'transient')), (this.settings?.requestTimeoutMs ?? 60000));
             deadline.unref();
-            req.once('close', () => clearTimeout(deadline));
+            const connect = setTimeout(() => req.destroy(new SourceError('Source connection timed out.', 'transient')), this.settings?.connectTimeoutMs ?? 15000);
+            connect.unref();
+            req.once('socket', socket => {
+                if (!socket.connecting)
+                    clearTimeout(connect);
+                else
+                    socket.once('secureConnect', () => clearTimeout(connect));
+            });
+            req.once('close', () => {
+                clearTimeout(deadline);
+                clearTimeout(connect);
+            });
             req.setTimeout(30000, () => req.destroy(new SourceError('Source request timed out.', 'transient')));
             req.on('error', e => reject(e instanceof SourceError || signal?.aborted ? e : new SourceError('Source network request failed.', 'transient')));
         });
@@ -185,6 +254,8 @@ export interface RequestOptions {
     referer?: string;
     bearer?: string;
     form?: URLSearchParams;
+    outputFile?: string;
+    origin?: string;
     cookies?: (url: URL) => Promise<string>;
 }
 export const sharedHttp = new SafeHttp();

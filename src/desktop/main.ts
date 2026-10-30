@@ -7,9 +7,9 @@ import { mkdir, appendFile } from 'node:fs/promises';
 import { z } from 'zod';
 import { Store } from '../core/store.js';
 import { defaults, settingsSchema, validateRoot } from '../core/settings.js';
-import { Registry, websiteAdapters } from '../sources/registry.js';
+import { Registry, websiteAdapters, toongodUnavailable } from '../sources/registry.js';
 import { MangaDex } from '../sources/mangadex.js';
-import { sharedHttp } from '../sources/http.js';
+import { sharedHttp, closeHttpConnections } from '../sources/http.js';
 import { MangaDexAccount } from '../sources/mangadex-account.js';
 import { SecretVault } from './secrets.js';
 import { Queue } from '../engine/queue.js';
@@ -68,10 +68,11 @@ async function shutdown() {
         return;
     quitting = true;
     try {
-        sessions.close();
         const closing = dashboard?.close();
         await queue?.stop();
+        await sessions.close();
         await closing;
+        closeHttpConnections();
         store?.close();
         tray?.destroy();
         await log('Clean shutdown');
@@ -125,8 +126,9 @@ else {
         }
         const comixHosts = ['comix.to', 'static.comix.to'];
         const registry = new Registry([new MangaDex(sharedHttp), ...websiteAdapters((id, url) => sessions.cookies(id, url), {
-                hosts: comixHosts, transport: sessions.transport('comix', comixHosts), render: (url, mode, signal) => sessions.render('comix', comixHosts, url, mode, signal)
-            })]);
+                fastPath: true, hosts: comixHosts, transport: sessions.assistedTransport('comix', comixHosts), render: (url, mode, signal) => sessions.render('comix', comixHosts, url, mode, signal)
+            }, (source, hosts) => sessions.assistedTransport(source, hosts))], [toongodUnavailable]);
+        registry.configure(settings);
         if (combinedFolders) {
             const series = new Map(store.jobs().filter(j => path.resolve(j.root) === path.resolve(settings.downloadRoot)).map(j => [`${j.source}:${j.series.id}`, j.series]));
             for (const s of series.values()) {
@@ -140,7 +142,11 @@ else {
         queue = new Queue(store, registry, () => settings);
         const maintenance = new StagingMaintenance(store, queue);
         const mangaAccount = new MangaDexAccount(new SecretVault(path.join(data, 'secrets')));
-        dashboard = createDashboard(store, queue, registry, () => settings, path.dirname(uiFile));
+        dashboard = createDashboard(store, queue, registry, () => settings, path.dirname(uiFile), next => {
+            store!.set('settings', next);
+            settings = next;
+            registry.configure(settings);
+        });
         try {
             const port = await dashboard.listen();
             localUrl = `http://127.0.0.1:${port}`;
@@ -225,6 +231,7 @@ else {
                 }
                 const restart = data.settings.port !== settings.port || !localUrl;
                 settings = data.settings;
+                registry.configure(settings);
                 if (hash)
                     dashboard!.auth.clear();
                 return { ok: true, restartRequired: restart };

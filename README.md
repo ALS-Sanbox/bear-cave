@@ -6,7 +6,9 @@ Version **0.3.1** fixes Comix covers rejected because its CDN labels JPEG files 
 
 Version **0.3.3** adds persistent collapsible download groups, background folder checks for chapters saved by Bear Cave and other downloaders, and PNG/JPG cover art choices. See [0.3.3 release notes](docs/release-0.3.3.md).
 
-Version **0.3.0** adds streaming recovery, verified history and safe redownload, grouped queues, indexed/paginated library queries, source-level challenge recovery, actual cover images, followed series and local staging maintenance. See [release notes](docs/release-0.3.0.md) and [source status](docs/source-status.md). Enabled does not mean live access is healthy; ToonGod has been removed. Search defaults to all eight enabled sources, including Comix, MangaPill and Weeb Central; source failures are shown separately.
+**0.4.0** adds concurrent page workers, secure keep-alive pooling, streaming image downloads, source-aware pacing, performance profiles and mobile dashboard controls. See [implementation and benchmarks](docs/performance-0.4.0.md). Existing preferences remain unchanged until a profile is selected. ToonGod remains unavailable pending live verification.
+
+Version **0.3.0** adds streaming recovery, verified history and safe redownload, grouped queues, indexed/paginated library queries, source-level challenge recovery, actual cover images, followed series and local staging maintenance. See [release notes](docs/release-0.3.0.md) and [source status](docs/source-status.md). Enabled does not mean live access is healthy; ToonGod has been removed. Search defaults to all nine enabled sources, including Comix, MangaFreak, MangaPill and Weeb Central; source failures are shown separately.
 
 ## Windows development
 

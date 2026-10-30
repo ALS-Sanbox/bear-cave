@@ -5,6 +5,13 @@ import { Comix } from '../src/sources/comix.js';
 import { encodePath, type WebsiteTransport } from '../src/sources/website.js';
 const http = (html: (url: URL) => string): WebsiteTransport => ({ html: async input => html(new URL(input)), get: async () => Buffer.from('fixture') });
 describe('additional sources', () => {
+ it('Comix leaves Referer and Origin absent for both buffered and streaming CDN requests',async()=>{
+  const calls:unknown[]=[];
+  const source=new Comix({transport:{html:async()=>'',get:async(_url,_hosts,_signal,_image,options)=>{calls.push(options);return Buffer.from('fixture');},getToFile:async(_url,_hosts,_file,_signal,options)=>{calls.push(options);}}});
+  await source.readPage('https://static.comix.to/page.jpg');
+  await source.downloadPage('https://static.comix.to/page.jpg','unused-fixture-path');
+  expect(calls).toEqual([undefined,undefined]);
+ });
  it('MangaPill keeps covers, pages search, and preserves reader order', async () => {
   const source = new MangaPill(http(u => u.pathname === '/search' ? '<div><a href="/manga/2/one-piece"><img data-src="https://cdn.readdetectiveconan.com/cover.jpg"></a><div><a href="/manga/2/one-piece"><div>One Piece</div></a></div></div><a href="?page=2">Next</a>' : u.pathname.startsWith('/manga/') ? '<h1>One Piece</h1><a href="/chapters/2-2/one-piece-chapter-2">Chapter 2</a><a href="/chapters/2-1/one-piece-chapter-1">Chapter 1</a>' : '<img class="js-page" data-src="https://cdn.readdetectiveconan.com/2.jpg"><img class="js-page" data-src="https://cdn.readdetectiveconan.com/1.jpg">'));
   const search = await source.search('one', 0); expect(search.items).toHaveLength(1); expect(search.items[0].coverRef).toContain('cover.jpg'); expect(search.total).toBe(51);

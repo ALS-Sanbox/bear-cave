@@ -1,13 +1,22 @@
 import { renderSource, type RenderMode } from './rendered-source.js';
 import { setTimeout as delay } from 'node:timers/promises';
 import { SessionHttp, assertPublicHost } from '../sources/session-http.js';
+import path from 'node:path';
+import { app } from 'electron';
+import { InstalledBrowser } from './installed-browser.js';
+import { BrowserAssistedTransport } from '../sources/browser-assisted.js';
 import { BrowserWindow, session } from 'electron';
 import type { SourceAdapter } from '../shared/types.js';
-import { validateUrl } from '../sources/http.js';
+import { SafeHttp, validateUrl } from '../sources/http.js';
 export class BrowserSessions {
+    private installed = new Map<string, InstalledBrowser>();
     private renders = new Set<BrowserWindow>();
     private rendering = new Set<string>();
-    private renderWindows = new Map<string, { window: BrowserWindow; mode: RenderMode; idle?: ReturnType<typeof setTimeout> }>();
+    private renderWindows = new Map<string, {
+        window: BrowserWindow;
+        mode: RenderMode;
+        idle?: ReturnType<typeof setTimeout>;
+    }>();
     private stopped = new AbortController();
     private dynamicImages = new Map<string, string[]>();
     private guarded = new Map<string, Set<string>>();
@@ -54,16 +63,34 @@ export class BrowserSessions {
             await this.checkHost(url);
         });
     }
+    assistedTransport(source: string, hosts: string[]) {
+        const session = this.transport(source, hosts);
+        let browser = this.installed.get(source);
+        if (!browser) {
+            browser = new InstalledBrowser(path.join(app.getPath('userData'), 'source-browsers', source), hosts, { sourceHosts: hosts.filter(h => !h.startsWith('*.')), generic: true });
+            this.installed.set(source, browser);
+        }
+        return new BrowserAssistedTransport(new SafeHttp(1100), {
+            get retryCount() {
+                return session.retryCount;
+            },
+            html: (url, allowed, signal) => session.html(url, allowed, signal),
+            get: (url, allowed, signal, image, options) => session.get(url, [...new Set([...allowed, ...hosts])], signal, image, options),
+            getToFile: (url, allowed, file, signal, options) => session.getToFile(url, [...new Set([...allowed, ...hosts])], file, signal, options),
+            configureDownloads: (...args) => session.configureDownloads(...args)
+        }, (url, signal) => this.render(source, hosts, url, 'document', signal), browser);
+    }
     async render(source: string, hosts: string[], url: string, mode: RenderMode, signal?: AbortSignal) {
-        validateUrl(url, ['comix.to']);
-        if (source !== 'comix')
+        validateUrl(url, hosts);
+        if (source !== 'comix' && mode !== 'document')
             throw Error('Unsupported rendered source.');
         const combined = AbortSignal.any([this.stopped.signal, ...(signal ? [signal] : [])]);
         while (this.rendering.has(source))
             await delay(25, undefined, { signal: combined });
         combined.throwIfAborted();
         this.rendering.add(source);
-        this.dynamicImages.set(source, hosts);
+        if (source === 'comix')
+            this.dynamicImages.set(source, hosts);
         const previous = this.renderWindows.get(source);
         if (previous?.idle)
             clearTimeout(previous.idle);
@@ -80,7 +107,8 @@ export class BrowserSessions {
                     this.renders.delete(window);
                     const entry = this.renderWindows.get(source);
                     if (entry?.window === window) {
-                        if (entry.idle) clearTimeout(entry.idle);
+                        if (entry.idle)
+                            clearTimeout(entry.idle);
                         this.renderWindows.delete(source);
                     }
                 });
@@ -91,7 +119,10 @@ export class BrowserSessions {
             if (entry && !entry.window.isDestroyed()) {
                 entry.mode = mode;
                 entry.window.webContents.setBackgroundThrottling(true);
-                entry.idle = setTimeout(() => { if (!entry.window.isDestroyed()) entry.window.destroy(); }, 60000);
+                entry.idle = setTimeout(() => {
+                    if (!entry.window.isDestroyed())
+                        entry.window.destroy();
+                }, 60000);
                 entry.idle.unref();
             }
             this.rendering.delete(source);
@@ -128,14 +159,17 @@ export class BrowserSessions {
         window.on('closed', () => this.windows.delete(adapter.manifest.id));
         await window.loadURL(account.loginUrl);
     }
-    close() {
+    async close() {
         this.stopped.abort();
         for (const entry of this.renderWindows.values())
-            if (entry.idle) clearTimeout(entry.idle);
+            if (entry.idle)
+                clearTimeout(entry.idle);
         for (const w of this.renders)
             w.destroy();
         for (const w of this.windows.values())
             w.destroy();
         this.windows.clear();
+        await Promise.allSettled([...this.installed.values()].map(b => b.close()));
+        this.installed.clear();
     }
 }

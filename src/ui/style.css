@@ -1047,3 +1047,27 @@ footer span {
   min-width: 10rem;
   overflow-wrap: anywhere;
 }
+
+.performance-settings {
+  min-width: 0;
+  border: 1px solid var(--border, #454545);
+  border-radius: .7rem;
+  padding: 1rem;
+}
+
+.performance-settings .form-grid > label {
+  min-width: 0;
+}
+
+.performance-settings input, .performance-settings select {
+  width: 100%;
+  min-width: 0;
+}
+
+.performance-settings .check input {
+  width: auto;
+}
+
+.performance-summary {
+  overflow-wrap: anywhere;
+}

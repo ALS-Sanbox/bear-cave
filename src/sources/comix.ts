@@ -2,6 +2,7 @@ import { load } from 'cheerio';
 import { WebsiteSource, manifest, encodePath, text, type WebsiteTransport } from './website.js';
 import { SourceError, type ChapterFilter, type Series } from '../shared/types.js';
 export interface ComixBrowser {
+    fastPath?: boolean;
     render?: (url: string, mode: 'browse' | 'series' | 'chapters' | 'reader', signal?: AbortSignal) => Promise<string>;
     transport?: WebsiteTransport;
     hosts?: string[];
@@ -15,7 +16,25 @@ export class Comix extends WebsiteSource {
             this.manifest.imageHosts = browser.hosts;
         this.manifest.capabilities.push('translation-groups');
     }
+    private browserEnabled = true;
+    override configureDownloads(settings: import('../shared/types.js').Settings) {
+        super.configureDownloads(settings);
+        this.browserEnabled = settings.browserAssisted !== false;
+    }
     private async rendered(url: string, mode: 'browse' | 'series' | 'chapters' | 'reader', signal?: AbortSignal) {
+        if (this.browser.fastPath && (mode === 'browse' || mode === 'series')) {
+            try {
+                const page = await this.page(url, signal);
+                if (mode === 'browse' ? page('a[href^="/title/"]').length || /0 items|no results|no titles/i.test(page('body').text()) : page('h1.mpage__title').length && page('#initial-data').length)
+                    return page;
+            }
+            catch (e) {
+                if (signal?.aborted || e instanceof SourceError && !['action_required', 'transient'].includes(e.kind))
+                    throw e;
+            }
+        }
+        if (!this.browserEnabled)
+            throw new SourceError('Browser-assisted retrieval is disabled. Enable it in Download performance to use this source.', 'action_required');
         if (!this.browser.render)
             throw new SourceError('Comix requires the Bear Cave desktop browser connection. Open the desktop app and retry.', 'action_required');
         return load(await this.browser.render(url, mode, signal));
@@ -107,6 +126,16 @@ export class Comix extends WebsiteSource {
         return this.readPage(url, signal);
     }
     override async readPage(url: string, signal?: AbortSignal) {
+        // Current Comix CDNs reject explicit Referer/Origin headers. Keep the
+        // ordinary public image request used by the original adapter.
         return this.http.get(url, this.manifest.imageHosts, signal, true);
+    }
+    override async downloadPage(url: string, file: string, signal?: AbortSignal) {
+        if (this.http.getToFile)
+            await this.http.getToFile(url, this.manifest.imageHosts, file, signal);
+        else {
+            const { writeFile } = await import('node:fs/promises');
+            await writeFile(file, await this.readPage(url, signal));
+        }
     }
 }

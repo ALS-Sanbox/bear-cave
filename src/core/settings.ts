@@ -4,9 +4,18 @@ import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import type { Settings } from '../shared/types.js';
 export const settingsSchema = z.object({
-    downloadRoot: z.string().min(3).max(220), format: z.enum(['folders', 'cbz']), coverFormat: z.enum(['png','jpg']).default('png'),
+    performanceProfile: z.enum(['conservative', 'balanced', 'fast', 'custom']).default('custom'),
+    globalPageRequests: z.number().int().min(1).max(40).optional(),
+    sourcePageRequests: z.record(z.string().regex(/^[a-z0-9-]+$/), z.number().int().min(1).max(20)).default({}),
+    sourceIntervals: z.record(z.string().regex(/^[a-z0-9-]+$/), z.number().int().min(0).max(30000)).default({}),
+    retryAttempts: z.number().int().min(0).max(6).default(3),
+    retryBaseMs: z.number().int().min(100).max(30000).default(1000),
+    connectTimeoutMs: z.number().int().min(1000).max(60000).default(15000),
+    requestTimeoutMs: z.number().int().min(5000).max(180000).default(60000),
+    browserAssisted: z.boolean().default(true),
+    downloadRoot: z.string().min(3).max(220), format: z.enum(['folders', 'cbz']), coverFormat: z.enum(['png', 'jpg']).default('png'),
     globalChapters: z.number().int().min(1).max(8), sourceChapters: z.record(z.string().regex(/^[a-z0-9-]+$/), z.number().int().min(1).max(4)),
-    pageRequests: z.number().int().min(1).max(3), port: z.number().int().min(1024).max(65535),
+    pageRequests: z.number().int().min(1).max(16), port: z.number().int().min(1024).max(65535),
     startWithWindows: z.boolean(), publicUrl: z.string().max(200), trustTunnel: z.boolean()
 }).strict().superRefine((s, ctx) => {
     if (s.publicUrl) {
@@ -24,8 +33,17 @@ export const settingsSchema = z.object({
 }).transform(s => ({ ...s, publicUrl: s.publicUrl ? new URL(s.publicUrl).origin : '' }));
 export function defaults(root: string): Settings {
     return {
-        downloadRoot: root, format: 'cbz', coverFormat: 'png', globalChapters: 2, sourceChapters: { mangadex: 1 }, pageRequests: 1, port: 43110, startWithWindows: false, publicUrl: '', trustTunnel: false
+        downloadRoot: root, format: 'cbz', coverFormat: 'png', globalChapters: 3, sourceChapters: { mangadex: 1 }, pageRequests: 6, globalPageRequests: 18, performanceProfile: 'balanced', sourcePageRequests: {}, sourceIntervals: {}, retryAttempts: 3, retryBaseMs: 1000, connectTimeoutMs: 15000, requestTimeoutMs: 60000, browserAssisted: true, port: 43110, startWithWindows: false, publicUrl: '', trustTunnel: false
     };
+}
+export const performanceKeys = ['performanceProfile', 'globalChapters', 'sourceChapters', 'pageRequests', 'globalPageRequests', 'sourcePageRequests', 'sourceIntervals', 'retryAttempts', 'retryBaseMs', 'connectTimeoutMs', 'requestTimeoutMs', 'browserAssisted'] as const;
+export function performancePreferences(settings: Settings) {
+    return Object.fromEntries(performanceKeys.map(k => [k, settings[k]]));
+}
+export function updatePerformance(current: Settings, input: unknown): Settings {
+    if (!input || typeof input !== 'object' || Array.isArray(input) || Object.keys(input).some(k => !(performanceKeys as readonly string[]).includes(k)))
+        throw Error('Invalid download performance settings.');
+    return settingsSchema.parse({ ...current, ...input });
 }
 export async function validateRoot(root: string, forbidden: string[]): Promise<string> {
     if (!path.isAbsolute(root) || root.startsWith('\\\\') || root.startsWith('//'))

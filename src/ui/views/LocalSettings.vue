@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import PerformanceSettings from '../components/PerformanceSettings.vue';
 import { ref, computed, onMounted } from 'vue';
 import type { Settings, SourceManifest } from '../../shared/types';
 const local = window.bearCaveLocal!;
@@ -104,8 +105,14 @@ onMounted(() => {
         sources.value = data.sources ?? [];
         mangaAccount.value = data.mangaAccount ?? { connected: false };
         adminConfigured.value = data.adminConfigured;
-        for (const s of enabledSources.value)
+        config.value.globalPageRequests ??= config.value.pageRequests;
+        config.value.sourcePageRequests ??= {};
+        config.value.sourceIntervals ??= {};
+        for (const s of enabledSources.value) {
             config.value.sourceChapters[s.id] ??= s.recommended.chapters;
+            config.value.sourcePageRequests[s.id] ??= s.recommended.pageRequests;
+            config.value.sourceIntervals[s.id] ??= s.id === 'mangadex' ? 500 : s.id === 'mangafreak' ? 0 : 200;
+        }
     });
 });
 </script>
@@ -143,21 +150,8 @@ onMounted(() => {
         <option value="jpg">JPG (coverart.jpg)</option>
       </select>
     </label>
-    <label>
-      Active chapters · global
-      <input v-model.number="config.globalChapters" type="number" min="1" max="8" required>
-    </label>
-    <label v-for="s in enabledSources" :key="s.id">
-      Active chapters ·
-      {{ s.name }}
-      <input v-model.number="config.sourceChapters[s.id]" type="number" min="1" max="4" required>
-    </label>
   </div>
-  <label>
-    Simultaneous page requests
-    <input v-model.number="config.pageRequests" type="number" min="1" max="3" required>
-  </label>
-  <p class="hint">Source limits count active chapter jobs. Request pacing and Retry-After apply separately. Existing jobs keep their original folder and output format.</p>
+  <PerformanceSettings :config="config" :sources="sources"/>
   <h2>Application</h2>
   <label class="check">
     <input v-model="config.startWithWindows" type="checkbox">

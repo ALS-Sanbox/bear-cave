@@ -1,5 +1,5 @@
 import { ref, computed, onMounted, onUnmounted, watch, type UnwrapNestedRefs } from 'vue';
-import type { Series, Chapter, Job, SourceManifest, PageResult, FollowedSeries } from '../../shared/types';
+import type { Settings, Series, Chapter, Job, SourceManifest, PageResult, FollowedSeries } from '../../shared/types';
 export interface Preview {
     token: string;
     count: number;
@@ -60,13 +60,18 @@ export function useDashboard() {
     let searchController: AbortController | undefined, searchedQuery = '';
     let seriesController: AbortController | undefined, chapterController: AbortController | undefined;
     let libraryController: AbortController | undefined;
-    const libraryChecking=ref(false),libraryMessage=ref(''),libraryError=ref('');
-    function cancelFolderCheck(){libraryController?.abort();libraryChecking.value=false;}
+    const libraryChecking = ref(false), libraryMessage = ref(''), libraryError = ref('');
+    function cancelFolderCheck() {
+        libraryController?.abort();
+        libraryChecking.value = false;
+    }
     const detailLoading = ref(false), chaptersLoading = ref(false), chaptersError = ref('');
     function closeSeries() {
         seriesController?.abort();
         chapterController?.abort();
-        cancelFolderCheck();libraryMessage.value='';libraryError.value='';
+        cancelFolderCheck();
+        libraryMessage.value = '';
+        libraryError.value = '';
         detailLoading.value = false;
         chaptersLoading.value = false;
         chaptersError.value = '';
@@ -74,7 +79,11 @@ export function useDashboard() {
         chapters.value = undefined;
         preview.value = undefined;
     }
-    watch([language,group],()=>{cancelFolderCheck();libraryMessage.value='';libraryError.value='';});
+    watch([language, group], () => {
+        cancelFolderCheck();
+        libraryMessage.value = '';
+        libraryError.value = '';
+    });
     const sources = ref<SourceManifest[]>([]), jobs = ref<Job[]>([]), counts = ref<Record<string, number>>({}), holds = ref<Hold[]>([]), paused = ref(false), total = ref(0), offset = ref(0), pageSize = 100;
     const librarySearch = ref(''), sourceFilter = ref(''), statusFilter = ref(''), follows = ref<FollowedSeries[]>([]);
     const enabledSources = computed(() => sources.value.filter(s => s.status === 'operational')), activeCount = computed(() => counts.value.running ?? 0), remainingCount = computed(() => Object.entries(counts.value).reduce((n, [state, count]) => n + (state === 'completed' ? 0 : count), 0));
@@ -85,6 +94,33 @@ export function useDashboard() {
         total: number;
         active?: string;
     }>>({});
+    const performanceConfig = ref<Settings>();
+    const performance = ref({
+        currentBytesPerSecond: 0, averageBytesPerSecond: 0, activeChapters: 0, activeImages: 0, done: 0, total: 0, completedImages: 0, failedImages: 0, retries: 0
+    });
+    async function loadPerformance() {
+        try {
+            const config = await api<Settings>('performance');
+            config.globalPageRequests ??= config.pageRequests;
+            config.sourcePageRequests ??= {};
+            config.sourceIntervals ??= {};
+            for (const s of enabledSources.value) {
+                config.sourceChapters[s.id] ??= s.recommended.chapters;
+                config.sourcePageRequests[s.id] ??= s.recommended.pageRequests;
+                config.sourceIntervals[s.id] ??= s.id === 'mangadex' ? 500 : s.id === 'mangafreak' ? 0 : 200;
+            }
+            performanceConfig.value = config;
+        }
+        catch (e) {
+            error.value = (e as Error).message;
+        }
+    }
+    async function savePerformance() {
+        await perform(async () => {
+            await api('performance', performanceConfig.value);
+            message.value = 'Download performance saved.';
+        });
+    }
     const preview = ref<Preview>(), previewLoading = ref(false), previewError = ref(''), confirmTranslations = ref(false), downloadDialog = ref<DialogPort>();
     let previewController: AbortController | undefined;
     let timer: ReturnType<typeof setTimeout> | undefined, stopped = false, refreshing = false, refreshAgain = false;
@@ -175,6 +211,7 @@ export function useDashboard() {
                 history: String(view.value === 'history'), offset: String(offset.value), limit: String(pageSize), q: librarySearch.value, source: sourceFilter.value, state: statusFilter.value
             });
             const data = await api<{
+                performance?: typeof performance.value;
                 jobs: Job[];
                 total: number;
                 counts: Record<string, number>;
@@ -183,6 +220,7 @@ export function useDashboard() {
                 groups: typeof sourceGroups.value;
             }>(['queue', 'history'].includes(view.value) ? `jobs?${params}` : 'summary');
             if (key === [view.value, offset.value, librarySearch.value, sourceFilter.value, statusFilter.value].join('|')) {
+                performance.value = data.performance ?? performance.value;
                 jobs.value = data.jobs;
                 total.value = data.total;
                 counts.value = data.counts;
@@ -274,40 +312,71 @@ export function useDashboard() {
         };
     }
     async function searchAll(controller: AbortController) {
-        searchStates.value.forEach(state => { state.state = 'searching'; });
+        searchStates.value.forEach(state => {
+            state.state = 'searching';
+        });
         const completed = new Set<string>();
         let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
         try {
             const response = await request(`search-all?q=${encodeURIComponent(searchedQuery)}`, undefined, controller.signal);
             reader = response.body?.getReader();
-            if (!reader) throw Error('Search response was empty. Retry the search.');
+            if (!reader)
+                throw Error('Search response was empty. Retry the search.');
             const decoder = new TextDecoder();
             let buffer = '';
             const accept = (line: string) => {
-                if (!line.trim() || controller !== searchController || controller.signal.aborted) return;
-                const event = JSON.parse(line) as { source: string; page?: PageResult<Series>; error?: string };
+                if (!line.trim() || controller !== searchController || controller.signal.aborted)
+                    return;
+                const event = JSON.parse(line) as {
+                    source: string;
+                    page?: PageResult<Series>;
+                    error?: string;
+                };
                 const state = searchStates.value.find(s => s.id === event.source);
-                if (!state) return;
+                if (!state)
+                    return;
                 completed.add(event.source);
-                if (event.page) acceptSearchPage(event.source, event.page, controller);
-                else { state.state = 'error'; state.retryOffset = 0; state.error = event.error || 'Source search failed. Retry this source.'; }
+                if (event.page)
+                    acceptSearchPage(event.source, event.page, controller);
+                else {
+                    state.state = 'error';
+                    state.retryOffset = 0;
+                    state.error = event.error || 'Source search failed. Retry this source.';
+                }
             };
             for (;;) {
                 const part = await reader.read();
                 buffer += decoder.decode(part.value, { stream: !part.done });
-                if (buffer.length > 2 * 1024 * 1024) throw Error('Search response exceeded its size limit.');
+                if (buffer.length > 2 * 1024 * 1024)
+                    throw Error('Search response exceeded its size limit.');
                 let end: number;
-                while ((end = buffer.indexOf('\n')) >= 0) { accept(buffer.slice(0, end)); buffer = buffer.slice(end + 1); }
-                if (part.done) { accept(buffer); break; }
+                while ((end = buffer.indexOf('\n')) >= 0) {
+                    accept(buffer.slice(0, end));
+                    buffer = buffer.slice(end + 1);
+                }
+                if (part.done) {
+                    accept(buffer);
+                    break;
+                }
             }
-            if (searchStates.value.some(state => !completed.has(state.id))) throw Error('Search response ended early. Retry unfinished sources.');
-        } catch (e) {
-            if (controller !== searchController || controller.signal.aborted) return;
+            if (searchStates.value.some(state => !completed.has(state.id)))
+                throw Error('Search response ended early. Retry unfinished sources.');
+        }
+        catch (e) {
+            if (controller !== searchController || controller.signal.aborted)
+                return;
             searchStates.value.filter(state => !completed.has(state.id) && ['searching', 'waiting'].includes(state.state)).forEach(state => {
-                state.state = 'error'; state.retryOffset = 0; state.error = (e as Error).message;
+                state.state = 'error';
+                state.retryOffset = 0;
+                state.error = (e as Error).message;
             });
-        } finally {
-            if (reader) { await reader.cancel().catch(() => {}); reader.releaseLock(); }
+        }
+        finally {
+            if (reader) {
+                await reader.cancel().catch(() => {
+                });
+                reader.releaseLock();
+            }
         }
     }
     async function searchPage(source: string, at: number, controller: AbortController, append = false) {
@@ -354,8 +423,10 @@ export function useDashboard() {
         try {
             // Each provider has its own pacing and cancellation; a slow provider
             // must not prevent an unrelated provider from starting its first page.
-            if (selectedSource.value === 'all') await searchAll(controller);
-            else if (targets[0]) await searchPage(targets[0].id, at, controller);
+            if (selectedSource.value === 'all')
+                await searchAll(controller);
+            else if (targets[0])
+                await searchPage(targets[0].id, at, controller);
         }
         finally {
             if (searchController === controller)
@@ -401,24 +472,48 @@ export function useDashboard() {
             await loadChapters(chapters.value?.offset ?? 0);
         });
     }
-    async function checkFolder(force=true) {
-        if(!detail.value)return;
+    async function checkFolder(force = true) {
+        if (!detail.value)
+            return;
         cancelFolderCheck();
-        const controller=new AbortController(),series=detail.value,filter=JSON.stringify([language.value,group.value]);libraryController=controller;
-        const signal=AbortSignal.any([controller.signal,...(seriesController?[seriesController.signal]:[])]);
-        libraryChecking.value=true;libraryError.value='';libraryMessage.value='';
-        try{
-            const result=await api<{folderFound:boolean;completed?:number;imported:number;ambiguous:number;skipped:number}>('library-scan',{source:series.source,seriesId:series.id,language:language.value,group:group.value||undefined,force},signal);
-            if(signal.aborted||libraryController!==controller||filter!==JSON.stringify([language.value,group.value]))return;
-            libraryMessage.value=result.folderFound?`Folder checked: ${result.completed??0} completed chapter(s) recognized.`:'No matching series folder found.';
-            if(result.ambiguous)libraryMessage.value+=' Some files or folders are ambiguous. Choose a translation group or check the folder naming, then recheck.';
-            if(result.skipped)libraryMessage.value+=` ${result.skipped} unsupported or incomplete file(s) left unchanged.`;
-            if(result.imported)libraryMessage.value+=' Numbered external files were matched to the selected language/group.';
-            if(result.folderFound)await loadChapters(chapters.value?.offset??0,false);
-        }catch(e){if(!signal.aborted&&libraryController===controller)libraryError.value=(e as Error).message;}
-        finally{if(libraryController===controller)libraryChecking.value=false;}
+        const controller = new AbortController(), series = detail.value, filter = JSON.stringify([language.value, group.value]);
+        libraryController = controller;
+        const signal = AbortSignal.any([controller.signal, ...(seriesController ? [seriesController.signal] : [])]);
+        libraryChecking.value = true;
+        libraryError.value = '';
+        libraryMessage.value = '';
+        try {
+            const result = await api<{
+                folderFound: boolean;
+                completed?: number;
+                imported: number;
+                ambiguous: number;
+                skipped: number;
+            }>('library-scan', {
+                source: series.source, seriesId: series.id, language: language.value, group: group.value || undefined, force
+            }, signal);
+            if (signal.aborted || libraryController !== controller || filter !== JSON.stringify([language.value, group.value]))
+                return;
+            libraryMessage.value = result.folderFound ? `Folder checked: ${result.completed ?? 0} completed chapter(s) recognized.` : 'No matching series folder found.';
+            if (result.ambiguous)
+                libraryMessage.value += ' Some files or folders are ambiguous. Choose a translation group or check the folder naming, then recheck.';
+            if (result.skipped)
+                libraryMessage.value += ` ${result.skipped} unsupported or incomplete file(s) left unchanged.`;
+            if (result.imported)
+                libraryMessage.value += ' Numbered external files were matched to the selected language/group.';
+            if (result.folderFound)
+                await loadChapters(chapters.value?.offset ?? 0, false);
+        }
+        catch (e) {
+            if (!signal.aborted && libraryController === controller)
+                libraryError.value = (e as Error).message;
+        }
+        finally {
+            if (libraryController === controller)
+                libraryChecking.value = false;
+        }
     }
-    async function loadChapters(at = 0, scan=false) {
+    async function loadChapters(at = 0, scan = false) {
         if (!detail.value)
             return;
         savePreferences();
@@ -429,7 +524,9 @@ export function useDashboard() {
         chaptersLoading.value = true;
         chaptersError.value = '';
         try {
-            const page = await api<PageResult<Chapter> & { library?: Series['library'] }>(`chapters?source=${series.source}&id=${encodeURIComponent(series.id)}&language=${encodeURIComponent(language.value)}&group=${encodeURIComponent(group.value)}&offset=${at}`, undefined, signal);
+            const page = await api<PageResult<Chapter> & {
+                library?: Series['library'];
+            }>(`chapters?source=${series.source}&id=${encodeURIComponent(series.id)}&language=${encodeURIComponent(language.value)}&group=${encodeURIComponent(group.value)}&offset=${at}`, undefined, signal);
             if (signal.aborted || chapterController !== controller || detail.value?.source !== series.source || detail.value?.id !== series.id)
                 return;
             chapters.value = page;
@@ -440,11 +537,14 @@ export function useDashboard() {
             page.items.flatMap(c => c.groups).forEach(g => merged.set(g.id, g));
             knownGroups.value = [...merged.values()];
             preview.value = undefined;
-            if(scan)void checkFolder(false);
-        } catch (e) {
+            if (scan)
+                void checkFolder(false);
+        }
+        catch (e) {
             if (!signal.aborted && chapterController === controller)
                 chaptersError.value = (e as Error).message;
-        } finally {
+        }
+        finally {
             if (chapterController === controller)
                 chaptersLoading.value = false;
         }
@@ -471,15 +571,17 @@ export function useDashboard() {
                 const result = await api<Series>(`series?source=${series.source}&id=${encodeURIComponent(series.id)}`, undefined, controller.signal);
                 if (seriesController === controller && !controller.signal.aborted && detail.value)
                     detail.value = { ...result, library: detail.value.library ?? result.library };
-            } catch (e) {
+            }
+            catch (e) {
                 if (seriesController === controller && !controller.signal.aborted)
                     error.value = (e as Error).message;
-            } finally {
+            }
+            finally {
                 if (seriesController === controller)
                     detailLoading.value = false;
             }
         })();
-        await Promise.all([metadata, loadChapters(0,true)]);
+        await Promise.all([metadata, loadChapters(0, true)]);
     }
     async function prepare(ids?: string[], followId?: string, all = false) {
         if (busy.value || !detail.value && !followId)
@@ -618,14 +720,30 @@ export function useDashboard() {
         });
     }
     const coverRevision = ref(0);
-    const coverFormat = ref<'default'|'png'|'jpg'>('default');
-    try { const saved=localStorage.getItem('bear-cave-cover-format');if(saved==='png'||saved==='jpg')coverFormat.value=saved; } catch { /* Use local settings by default. */ }
-    watch(coverFormat,value=>{try{localStorage.setItem('bear-cave-cover-format',value);}catch{/* Preferences are optional. */}});
+    const coverFormat = ref<'default' | 'png' | 'jpg'>('default');
+    try {
+        const saved = localStorage.getItem('bear-cave-cover-format');
+        if (saved === 'png' || saved === 'jpg')
+            coverFormat.value = saved;
+    }
+    catch { /* Use local settings by default. */
+    }
+    watch(coverFormat, value => {
+        try {
+            localStorage.setItem('bear-cave-cover-format', value);
+        }
+        catch { /* Preferences are optional. */
+        }
+    });
     async function downloadCover() {
         if (!detail.value)
             return;
         await perform(async () => {
-            const result = await api<{filename:string}>('cover', { source: detail.value!.source, id: detail.value!.id, format:coverFormat.value==='default'?undefined:coverFormat.value });
+            const result = await api<{
+                filename: string;
+            }>('cover', {
+                source: detail.value!.source, id: detail.value!.id, format: coverFormat.value === 'default' ? undefined : coverFormat.value
+            });
             coverRevision.value++;
             message.value = `Saved ${result.filename} in the series download folder.`;
         });
@@ -739,7 +857,8 @@ export function useDashboard() {
         document.removeEventListener('visibilitychange', visibility);
     });
     return {
-        checkFolder,cancelFolderCheck,libraryChecking,libraryMessage,libraryError,
+        performance, performanceConfig, loadPerformance, savePerformance,
+        checkFolder, cancelFolderCheck, libraryChecking, libraryMessage, libraryError,
         coverFormat,
         closeSeries, detailLoading, chaptersLoading, chaptersError,
         searching, searchStates, searchMore, coverRevision, allSelected, excluded, seriesTotal, selectedCount, isSelected, toggleChapter, selectPage, selectAll, deselectAll, prepareSelected, chapterAction, authenticated, setupRequired, password, busy, error, message, view, selectedSource, language, group, query, results, detail, chapters, selected, knownGroups, sources, jobs, counts, holds, paused, total, offset, pageSize, librarySearch, sourceFilter, statusFilter, follows, enabledSources, activeCount, remainingCount, sourceGroups, preview, previewLoading, previewError, confirmTranslations, downloadDialog, perform, refresh, login, logout, search, loadChapters, openSeries, prepare, cancelPreview, enqueue, control, groupControl, allControl, deleteDownloads, clearFailed, retrySource, verify, downloadAgain, downloadCover, followSeries, saveFollow, checkFollow, removeFollow, page, applyLibraryFilters

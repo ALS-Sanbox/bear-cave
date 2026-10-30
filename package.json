@@ -1,7 +1,7 @@
 {
   "name": "bear-cave",
   "productName": "Bear Cave",
-  "version": "0.3.3",
+  "version": "0.4.0",
   "private": true,
   "description": "Windows tray manga downloader",
   "author": "Bear Cave contributors",
@@ -15,13 +15,14 @@
     "start": "node scripts/run-electron.mjs .",
     "typecheck": "tsc --noEmit && vue-tsc --noEmit -p tsconfig.ui.json",
     "test": "vitest run",
-    "test:electron": "node scripts/run-electron.mjs scripts/electron-smoke.cjs && node scripts/run-electron.mjs scripts/main-smoke.cjs && node scripts/run-electron.mjs scripts/main-smoke.cjs --port-conflict && node scripts/run-electron.mjs scripts/download-ui-smoke.cjs && node scripts/run-electron.mjs scripts/search-ui-smoke.cjs && node scripts/run-electron.mjs scripts/rendered-source-smoke.cjs && node scripts/run-electron.mjs scripts/browsing-ui-smoke.cjs && node scripts/run-electron.mjs scripts/library-scan-ui-smoke.cjs",
+    "test:electron": "node scripts/run-electron.mjs scripts/electron-smoke.cjs && node scripts/run-electron.mjs scripts/main-smoke.cjs && node scripts/run-electron.mjs scripts/main-smoke.cjs --port-conflict && node scripts/run-electron.mjs scripts/download-ui-smoke.cjs && node scripts/run-electron.mjs scripts/search-ui-smoke.cjs && node scripts/run-electron.mjs scripts/rendered-source-smoke.cjs && node scripts/run-electron.mjs scripts/browsing-ui-smoke.cjs && node scripts/run-electron.mjs scripts/library-scan-ui-smoke.cjs && node scripts/run-electron.mjs scripts/performance-ui-smoke.cjs",
     "build": "node scripts/build-assets.mjs && tsc -p tsconfig.build.json && vite build && node scripts/copy-preload.mjs",
-    "dist:win": "npm run build && electron-builder --win nsis --x64 --publish never",
+    "dist:win": "npm run build && electron-builder --win nsis portable --x64 --publish never",
     "smoke:mangadex": "tsx scripts/smoke.ts",
     "smoke:sources": "tsx scripts/smoke-sources.ts",
     "smoke:browser": "tsx scripts/installed-browser-smoke.ts",
-    "format": "node scripts/format-source.mjs"
+    "format": "node scripts/format-source.mjs",
+    "benchmark": "tsx scripts/benchmark-downloads.ts"
   },
   "dependencies": {
     "cheerio": "^1.2.0",
@@ -45,7 +46,7 @@
     "appId": "net.lionhosting.bearcave",
     "productName": "Bear Cave",
     "directories": {
-      "output": "release"
+      "output": "release/0.4.0"
     },
     "files": [
       "dist/**/*",
@@ -53,14 +54,21 @@
     ],
     "asar": true,
     "win": {
-      "target": "nsis",
+      "target": [
+        "nsis",
+        "portable"
+      ],
       "icon": "build/branding/app.ico"
     },
     "nsis": {
       "oneClick": false,
       "perMachine": false,
       "allowToChangeInstallationDirectory": true,
-      "deleteAppDataOnUninstall": false
+      "deleteAppDataOnUninstall": false,
+      "artifactName": "${productName} Setup ${version} ${arch}.${ext}"
+    },
+    "portable": {
+      "artifactName": "${productName} Portable ${version} ${arch}.${ext}"
     }
   }
 }

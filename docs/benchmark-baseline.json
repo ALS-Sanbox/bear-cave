@@ -1,0 +1,63 @@
+{
+  "label": "baseline",
+  "date": "2026-10-28T22:34:08.710Z",
+  "environment": {
+    "platform": "win32",
+    "arch": "x64",
+    "node": "v24.21.0"
+  },
+  "results": [
+    {
+      "pages": 10,
+      "chapters": 1,
+      "ms": 745.1161000000002,
+      "imagesPerSecond": 13.420727320212244,
+      "MiBPerSecond": 1.677104552914325,
+      "requests": 10,
+      "retries": 0,
+      "maxActiveImages": 1,
+      "cpuMs": 312,
+      "peakRssMiB": 121.75,
+      "diskAndVerificationMs": 209.0329999999999
+    },
+    {
+      "pages": 50,
+      "chapters": 1,
+      "ms": 3380.1147,
+      "imagesPerSecond": 14.792397429590185,
+      "MiBPerSecond": 1.8485136077775195,
+      "requests": 50,
+      "retries": 0,
+      "maxActiveImages": 1,
+      "cpuMs": 939,
+      "peakRssMiB": 152.83203125,
+      "diskAndVerificationMs": 1037.3716000000031
+    },
+    {
+      "pages": 100,
+      "chapters": 1,
+      "ms": 6641.020199999999,
+      "imagesPerSecond": 15.057927394950555,
+      "MiBPerSecond": 1.8816952307414543,
+      "requests": 100,
+      "retries": 0,
+      "maxActiveImages": 1,
+      "cpuMs": 1843,
+      "peakRssMiB": 132.78515625,
+      "diskAndVerificationMs": 1945.7665000000106
+    },
+    {
+      "pages": 50,
+      "chapters": 3,
+      "ms": 3912.144900000001,
+      "imagesPerSecond": 38.34213809411813,
+      "MiBPerSecond": 4.79137775709598,
+      "requests": 150,
+      "retries": 0,
+      "maxActiveImages": 3,
+      "cpuMs": 2329,
+      "peakRssMiB": 152.9609375,
+      "diskAndVerificationMs": 4327.069699999995
+    }
+  ]
+}

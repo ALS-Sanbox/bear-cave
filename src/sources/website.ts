@@ -1,8 +1,8 @@
 import { load, type CheerioAPI } from 'cheerio';
 import { createHash } from 'node:crypto';
 import { SafeHttp, validateUrl, type RequestOptions } from './http.js';
-import { SourceError, type SourceAdapter, type SourceManifest, type Series, type Chapter, type ChapterFilter, type PageResult } from '../shared/types.js';
-export type WebsiteTransport = Pick<SafeHttp, 'html' | 'get'>;
+import { SourceError, type SourceAdapter, type SourceManifest, type Series, type Chapter, type ChapterFilter, type PageResult, type Settings } from '../shared/types.js';
+export type WebsiteTransport = Pick<SafeHttp, 'html' | 'get'> & Partial<Pick<SafeHttp, 'getToFile' | 'configureDownloads' | 'retryCount'>>;
 export function encodePath(value: string) {
     return Buffer.from(value).toString('base64url');
 }
@@ -63,6 +63,14 @@ export abstract class WebsiteSource implements SourceAdapter {
         value: unknown;
     }>();
     constructor(protected http: WebsiteTransport = new SafeHttp(1100), private cookies?: RequestOptions['cookies']) {
+    }
+    setTransport(http: WebsiteTransport) {
+        this.http = http;
+    }
+    get requestRetries() {
+        return (this.http as {
+            retryCount?: number;
+        }).retryCount ?? 0;
     }
     get account(): {
         kind: 'browser';
@@ -161,6 +169,17 @@ export abstract class WebsiteSource implements SourceAdapter {
             throw new SourceError('This series has no available cover art.');
         return this.readPage(new URL(image, this.manifest.website).href, signal);
     }
+    configureDownloads(settings: Settings) {
+        this.http.configureDownloads?.(settings, this.manifest.id, this.manifest.limits?.minIntervalMs ?? 0, this.manifest.id === 'mangafreak' ? 0 : 200);
+    }
+    async downloadPage(url: string, file: string, signal?: AbortSignal) {
+        if (this.http.getToFile)
+            await this.http.getToFile(url, this.manifest.imageHosts, file, signal, { referer: this.manifest.website, cookies: this.cookies ? u => this.manifest.apiHosts.includes(u.hostname) ? this.cookies!(u) : Promise.resolve('') : undefined });
+        else {
+            const { writeFile } = await import('node:fs/promises');
+            await writeFile(file, await this.readPage(url, signal));
+        }
+    }
     async readPage(url: string, signal?: AbortSignal) {
         return this.http.get(url, this.manifest.imageHosts, signal, true, { referer: this.manifest.website, cookies: this.cookies ? u => this.manifest.apiHosts.includes(u.hostname) ? this.cookies!(u) : Promise.resolve('') : undefined });
     }
@@ -172,8 +191,10 @@ export abstract class WebsiteSource implements SourceAdapter {
 }
 export function manifest(id: string, name: string, website: string, imageHosts: string[], note?: string): SourceManifest {
     return {
-        id, name, website, status: 'operational', interfaceVersion: 1, apiHosts: [new URL(website).hostname], imageHosts, capabilities: ['search', 'series', 'chapters', 'public-download', 'local-session'], note, recommended: {
-            chapters: 1, pageRequests: 1, requestIntervalMs: 1100
+        id, name, website, limits: {
+            chapters: 4, pageRequests: 6, minIntervalMs: 0
+        }, status: 'operational', interfaceVersion: 1, apiHosts: [new URL(website).hostname], imageHosts, capabilities: ['search', 'series', 'chapters', 'public-download', 'local-session'], note, recommended: {
+            chapters: 2, pageRequests: 6, requestIntervalMs: 1100
         }
     };
 }

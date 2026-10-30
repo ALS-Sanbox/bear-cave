@@ -1,6 +1,7 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue';
+import { computed, ref, onMounted } from 'vue';
 import type { DashboardModel } from '../composables/useDashboard';
+import PerformanceSettings from '../components/PerformanceSettings.vue';
 import CoverImage from '../components/CoverImage.vue';
 import JobCard from '../components/JobCard.vue';
 import LibraryFilters from '../components/LibraryFilters.vue';
@@ -8,20 +9,33 @@ import LibraryPagination from '../components/LibraryPagination.vue';
 const props = defineProps<{
     model: DashboardModel;
 }>();
+onMounted(() => props.model.loadPerformance());
 const collapsed = ref<string[]>([]);
 try {
     const saved = JSON.parse(localStorage.getItem('bear-cave-collapsed-series') ?? '[]');
-    if (Array.isArray(saved)) collapsed.value = saved.filter(k => typeof k === 'string' && k.length <= 1300).slice(0,1000);
-} catch { /* Start expanded if preferences are unavailable. */ }
-function expand(key: string, open: boolean) {
-    if (collapsed.value.includes(key) === !open) return;
-    collapsed.value = open ? collapsed.value.filter(k => k !== key) : [...collapsed.value, key].slice(-1000);
-    try { localStorage.setItem('bear-cave-collapsed-series', JSON.stringify(collapsed.value)); } catch { /* Browsing still works without storage. */ }
+    if (Array.isArray(saved))
+        collapsed.value = saved.filter(k => typeof k === 'string' && k.length <= 1300).slice(0, 1000);
 }
-function expandAll(open:boolean){
-    const keys=new Set(groups.value.map(g=>g.key));
-    collapsed.value=open?collapsed.value.filter(k=>!keys.has(k)):[...new Set([...collapsed.value,...keys])].slice(-1000);
-    try{localStorage.setItem('bear-cave-collapsed-series',JSON.stringify(collapsed.value));}catch{/* Preferences are optional. */}
+catch { /* Start expanded if preferences are unavailable. */
+}
+function expand(key: string, open: boolean) {
+    if (collapsed.value.includes(key) === !open)
+        return;
+    collapsed.value = open ? collapsed.value.filter(k => k !== key) : [...collapsed.value, key].slice(-1000);
+    try {
+        localStorage.setItem('bear-cave-collapsed-series', JSON.stringify(collapsed.value));
+    }
+    catch { /* Browsing still works without storage. */
+    }
+}
+function expandAll(open: boolean) {
+    const keys = new Set(groups.value.map(g => g.key));
+    collapsed.value = open ? collapsed.value.filter(k => !keys.has(k)) : [...new Set([...collapsed.value, ...keys])].slice(-1000);
+    try {
+        localStorage.setItem('bear-cave-collapsed-series', JSON.stringify(collapsed.value));
+    }
+    catch { /* Preferences are optional. */
+    }
 }
 const groups = computed(() => {
     const map = new Map<string, typeof props.model.jobs>();
@@ -37,6 +51,18 @@ const groups = computed(() => {
 
 <template>
 <section>
+  <details class="card">
+    <summary>Download performance</summary>
+    <form v-if="model.performanceConfig" class="settings" @submit.prevent="model.savePerformance">
+      <PerformanceSettings :config="model.performanceConfig" :sources="model.sources"/>
+      <button class="primary" :disabled="model.busy">Save performance settings</button>
+    </form>
+  </details>
+  <div class="card performance-summary">
+    <strong>{{(model.performance.currentBytesPerSecond/1048576).toFixed(2)}} MiB/s current &middot; {{(model.performance.averageBytesPerSecond/1048576).toFixed(2)}} MiB/s average</strong>
+    <p>{{model.performance.activeChapters}} active chapters &middot; {{model.performance.activeImages}} active image requests &middot; {{model.performance.done}} / {{model.performance.total}} images in active chapters</p>
+    <small>{{model.performance.completedImages}} images saved this session &middot; {{model.performance.failedImages}} failed images &middot; {{model.performance.retries}} request retries</small>
+  </div>
   <div class="section-bar">
     <h2>{{model.remainingCount}} queued and recent chapter(s)</h2>
     <div class="inline">
@@ -69,10 +95,10 @@ const groups = computed(() => {
       </span>
     </summary>
     <div v-if="!collapsed.includes(g.key)">
-    <div class="inline group-actions">
-      <button v-for="action in (['pause','resume','retry','remove'] as const)" :key="action" :disabled="model.busy" @click="model.groupControl(g.first.source,g.first.series.id,action)">{{{pause:'Pause series',resume:'Resume series',retry:'Retry eligible failures',remove:'Remove series from queue'}[action]}}</button>
-    </div>
-    <JobCard v-for="job in g.jobs" :key="job.id" :job="job" :model="model"/>
+      <div class="inline group-actions">
+        <button v-for="action in (['pause','resume','retry','remove'] as const)" :key="action" :disabled="model.busy" @click="model.groupControl(g.first.source,g.first.series.id,action)">{{{pause:'Pause series',resume:'Resume series',retry:'Retry eligible failures',remove:'Remove series from queue'}[action]}}</button>
+      </div>
+      <JobCard v-for="job in g.jobs" :key="job.id" :job="job" :model="model"/>
     </div>
   </details>
   <LibraryPagination :model="model"/>

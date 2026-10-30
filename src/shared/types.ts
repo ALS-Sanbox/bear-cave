@@ -72,9 +72,28 @@ export interface Job {
         checked: string;
     };
     previousOutputs?: string[];
-    external?: { kind: 'archive' | 'folder'; signature: string; pages: number; comicInfo?: {series?:string;number?:string;volume?:string;language?:string} };
+    external?: {
+        kind: 'archive' | 'folder';
+        signature: string;
+        pages: number;
+        comicInfo?: {
+            series?: string;
+            number?: string;
+            volume?: string;
+            language?: string;
+        };
+    };
 }
 export interface Settings {
+    performanceProfile?: 'conservative' | 'balanced' | 'fast' | 'custom';
+    globalPageRequests?: number;
+    sourcePageRequests?: Record<string, number>;
+    sourceIntervals?: Record<string, number>;
+    retryAttempts?: number;
+    retryBaseMs?: number;
+    connectTimeoutMs?: number;
+    requestTimeoutMs?: number;
+    browserAssisted?: boolean;
     downloadRoot: string;
     format: 'folders' | 'cbz';
     globalChapters: number;
@@ -87,6 +106,11 @@ export interface Settings {
     trustTunnel: boolean;
 }
 export interface SourceManifest {
+    limits?: {
+        chapters: number;
+        pageRequests: number;
+        minIntervalMs: number;
+    };
     id: string;
     name: string;
     website: string;
@@ -131,6 +155,9 @@ export interface FollowedSeries {
     translations: number;
 }
 export interface SourceAdapter {
+    readonly requestRetries?: number;
+    configureDownloads?(settings: Settings): void;
+    downloadPage?(url: string, file: string, signal?: AbortSignal): Promise<void>;
     manifest: SourceManifest;
     search(query: string, offset: number, signal?: AbortSignal): Promise<PageResult<Series>>;
     series(id: string, signal?: AbortSignal): Promise<Series>;

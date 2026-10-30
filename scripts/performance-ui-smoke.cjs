@@ -1,0 +1,26 @@
+const {app,BrowserWindow}=require('electron');
+const assert=require('node:assert/strict');const path=require('node:path');const {pathToFileURL}=require('node:url');const {mkdir,writeFile}=require('node:fs/promises');
+const temp=process.env.BEAR_CAVE_SMOKE_DATA;assert(temp);app.setPath('userData',temp);app.on('window-all-closed',()=>{});
+const imported=relative=>import(pathToFileURL(path.resolve(relative)).href);let dashboard,queue,store;
+app.whenReady().then(async()=>{
+ const {Store}=await imported('dist/main/core/store.js'),{defaults}=await imported('dist/main/core/settings.js'),{Registry}=await imported('dist/main/sources/registry.js'),{Queue}=await imported('dist/main/engine/queue.js'),{createDashboard}=await imported('dist/main/server/server.js'),{hashPassword}=await imported('dist/main/server/auth.js');
+ let settings=defaults(temp);store=new Store(path.join(temp,'fixture.sqlite'));store.set('admin-hash',await hashPassword('performance fixture password'));store.set('queue-paused',true);const registry=new Registry();queue=new Queue(store,registry,()=>settings);dashboard=createDashboard(store,queue,registry,()=>settings,path.resolve('dist/ui'),next=>{settings=next;store.set('settings',next);});
+ const port=await dashboard.listen(0);const window=new BrowserWindow({show:false,width:390,height:844,webPreferences:{sandbox:true,contextIsolation:true,nodeIntegration:false,backgroundThrottling:false}}),js=code=>window.webContents.executeJavaScript(code,true);
+ const until=async(fn,label)=>{const end=Date.now()+15000;while(!await fn()){if(Date.now()>end)throw Error('Timed out: '+label);await new Promise(r=>setTimeout(r,30));}};
+ await window.loadURL('http://127.0.0.1:'+port);await until(()=>js('!!document.querySelector(".login input[type=password]")'),'login');
+ await js(`(()=>{const e=document.querySelector('.login input[type=password]');e.value='performance fixture password';e.dispatchEvent(new Event('input',{bubbles:true}));document.querySelector('.login form').requestSubmit()})()`);
+ await until(()=>js('!!document.querySelector("nav")'),'dashboard');await js(`Array.from(document.querySelectorAll('nav button')).find(e=>e.textContent.includes('Download queue')).click()`);
+ await until(()=>js('!!document.querySelector(".performance-settings select")'),'performance preferences');await js(`document.querySelector('details.card').open=true`);
+ await js(`(()=>{const select=document.querySelector('.performance-settings select');select.value='fast';select.dispatchEvent(new Event('change',{bubbles:true}));})()`);
+ await js(`document.querySelector('.performance-settings').closest('form').requestSubmit()`);await until(()=>settings.performanceProfile==='fast','persistent performance save');assert.equal(settings.pageRequests,10);assert.equal(settings.globalChapters,5);assert.equal(store.get('settings').globalPageRequests,30);
+ assert(await js('document.querySelector(".performance-summary").textContent.includes("MiB/s")'));
+ await until(()=>js('!document.querySelector(".working")'),'save completed');
+ await js(`document.querySelector('details.card').open=true;document.querySelector('.performance-settings details').open=true`);
+ await new Promise(r=>setTimeout(r,100));assert(await js('document.querySelector(".performance-settings select").getBoundingClientRect().height>0'),'settings expanded');
+ await js(`document.querySelector('.performance-settings').scrollIntoView()`);
+ assert(await js('document.documentElement.scrollWidth<=innerWidth+1'),'mobile settings must fit the viewport');
+ window.showInactive();await new Promise(r=>setTimeout(r,250));
+ await mkdir('release/verification',{recursive:true});await writeFile('release/verification/performance-mobile.png',(await window.webContents.capturePage()).toPNG());
+ window.setSize(1200,900);await new Promise(r=>setTimeout(r,100));assert(await js('document.documentElement.scrollWidth<=innerWidth+1'),'desktop layout fits');
+ window.destroy();await dashboard.close();await queue.stop();store.close();console.log('Performance UI smoke passed: mobile/desktop layout, Fast profile persistence, source controls and queue telemetry.');app.quit();
+}).catch(async e=>{console.error(e);await dashboard?.close();await queue?.stop();store?.close();app.exit(1)});
